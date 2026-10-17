@@ -1,0 +1,52 @@
+{
+  "name": "simplenote-zh",
+  "version": "1.1.0",
+  "description": "高度还原 Simplenote 的纯中文笔记软件（支持云同步账号与 Windows/macOS/Linux 三端）",
+  "main": "main.js",
+  "author": "WorkBuddy",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist:win": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac --x64",
+    "dist:linux": "electron-builder --linux --x64",
+    "dist:all": "electron-builder --win --mac --linux --x64"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.workbuddy.simplenotezh",
+    "productName": "简易笔记",
+    "copyright": "Copyright © 2026 WorkBuddy",
+    "files": [
+      "index.html",
+      "styles.css",
+      "app.js",
+      "main.js",
+      "preload.js"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "简易笔记-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Utility",
+      "maintainer": "WorkBuddy"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# 依赖与构建产物（不入库）
+node_modules/
+server/node_modules/
+dist/
+server/data/
+release/
+*.log
+.DS_Store
+Thumbs.db
