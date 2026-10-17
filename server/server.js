@@ -13,6 +13,7 @@ const fs = require("fs");
 const path = require("path");
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || "0.0.0.0";
 const SECRET = process.env.JWT_SECRET || "simplenote-zh-dev-secret-change-me";
 const DATA_DIR = path.join(__dirname, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
@@ -104,6 +105,35 @@ app.post("/api/notes/sync", auth, (req, res) => {
   res.json({ notes: Object.keys(store).map((k) => store[k]) });
 });
 
-app.listen(PORT, () => {
-  console.log("简易笔记云同步服务已启动： http://localhost:" + PORT);
+app.listen(PORT, HOST, () => {
+  const ips = getLocalIps();
+  console.log("简易笔记云同步服务已启动");
+  console.log("本机访问：http://localhost:" + PORT);
+  if (ips.length) {
+    console.log("其他设备请用下面的「局域网地址」登录：");
+    ips.forEach(function (ip) {
+      console.log("   http://" + ip + ":" + PORT + "    （" + ipLabel(ip) + "）");
+    });
+  }
+  console.log("监听地址：" + HOST + ":" + PORT + "（0.0.0.0 表示所有网卡，局域网均可访问）");
 });
+
+// 常见局域网网段优先，VPN/虚拟网卡地址排在后面
+function getLocalIps() {
+  const nets = require("os").networkInterfaces();
+  const lan = [];
+  const other = [];
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if ((net.family === "IPv4" || net.family === 4) && !net.internal) {
+        if (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(net.address)) lan.push(net.address);
+        else other.push(net.address);
+      }
+    }
+  }
+  return lan.concat(other);
+}
+function ipLabel(ip) {
+  if (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)) return "局域网，同WiFi设备可直接访问";
+  return "虚拟网卡/VPN 地址，通常用于跨网远程";
+}
