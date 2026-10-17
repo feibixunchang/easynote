@@ -27,7 +27,7 @@
 需要 [Node.js](https://nodejs.org/) 20+：
 
 ```bash
-cd simplenote-zh
+cd easynote
 npm install                 # 安装 electron 与 electron-builder
 npm start                  # 以桌面窗口方式运行
 npm run dist:win           # 打包 Windows 安装包（nsis，输出 dist/ 下 .exe）
