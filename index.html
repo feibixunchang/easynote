@@ -7,6 +7,11 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- 顶部标题栏（拖拽区；Win/Linux 右上角与 macOS 左上角为系统原生窗口按钮） -->
+  <div class="titlebar-strip" id="titlebarStrip">
+    <span class="titlebar-title">简易笔记</span>
+  </div>
+
   <div class="app" id="app">
     <!-- 左侧栏：标签 / 搜索 / 回收站 -->
     <aside class="sidebar">
@@ -93,6 +98,14 @@
     <div class="modal-box">
       <h3>设置</h3>
       <div class="setting-row">
+        <label>主题模式</label>
+        <select id="themeModeSelect">
+          <option value="auto">跟随系统</option>
+          <option value="light">浅色</option>
+          <option value="dark">深色</option>
+        </select>
+      </div>
+      <div class="setting-row">
         <label>界面与正文字体</label>
         <select id="fontSelect"></select>
       </div>
@@ -109,6 +122,28 @@
           <option value="18">大</option>
           <option value="20">特大</option>
         </select>
+      </div>
+      <div class="setting-sep"></div>
+      <div class="setting-row">
+        <label>WebDAV 服务器</label>
+        <input id="davUrl" placeholder="https://dav.jianguoyun.com/dav/" />
+      </div>
+      <div class="setting-row">
+        <label>WebDAV 账号</label>
+        <input id="davUser" placeholder="用户名 / 邮箱" />
+      </div>
+      <div class="setting-row">
+        <label>WebDAV 密码</label>
+        <input id="davPass" type="password" placeholder="应用授权码（非登录密码）" />
+      </div>
+      <div class="setting-row">
+        <label>导出目录</label>
+        <input id="davDir" placeholder="/easynote" />
+      </div>
+      <p class="modal-sub" style="margin-top:-4px">将全部笔记导出为「一个 JSON 备份 + 每条笔记一个 Markdown 文件」。坚果云等服务的密码请填<b>应用授权码</b>。</p>
+      <div class="modal-actions" style="text-align:left">
+        <button id="btnDavTest">测试连接</button>
+        <button id="btnDavExport" class="primary">导出到 WebDAV</button>
       </div>
       <div class="modal-actions">
         <button id="settingsClose">关闭</button>

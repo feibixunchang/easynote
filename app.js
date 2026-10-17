@@ -4,11 +4,14 @@
 
   var STORE_KEY = "simplenote_zh_v1";
   var DARK_KEY = "simplenote_zh_dark";
+  var THEME_KEY = "simplenote_zh_theme"; // auto | light | dark
   var FONT_KEY = "simplenote_zh_font";
   var FONTSIZE_KEY = "simplenote_zh_fontsize";
   var SERVER_KEY = "simplenote_zh_server";
   var TOKEN_KEY = "simplenote_zh_token";
   var USER_KEY = "simplenote_zh_user";
+  var PURGE_KEY = "simplenote_zh_purged"; // 已永久删除的笔记 ID（墓碑，防止同步时被还原）
+  var DAV_KEY = "simplenote_zh_webdav";
   // 纯浏览器环境（无 Electron）下的回退字体清单（均为 Windows 常见中文字体）
   var FALLBACK_FONTS = [
     "微软雅黑", "Microsoft YaHei", "等线", "Dengxian", "黑体", "SimHei",
@@ -41,6 +44,25 @@
     };
   })();
 
+  // 笔记颜色标签调色板（在深浅两种模式下都保持辨识度）
+  var COLOR_PALETTE = [
+    { key: "", name: "无颜色" },
+    { key: "red", name: "红色", color: "#e05252" },
+    { key: "orange", name: "橙色", color: "#e08a3c" },
+    { key: "yellow", name: "黄色", color: "#d9b23c" },
+    { key: "green", name: "绿色", color: "#4caf7d" },
+    { key: "cyan", name: "青色", color: "#3aa8b5" },
+    { key: "blue", name: "蓝色", color: "#4a80d9" },
+    { key: "purple", name: "紫色", color: "#8a6fd6" },
+    { key: "pink", name: "粉色", color: "#d96a9b" },
+  ];
+  function colorOf(key) {
+    for (var i = 0; i < COLOR_PALETTE.length; i++) {
+      if (COLOR_PALETTE[i].key === key) return COLOR_PALETTE[i];
+    }
+    return COLOR_PALETTE[0];
+  }
+
   var state = {
     notes: [],
     currentId: null,
@@ -48,7 +70,9 @@
     activeTag: null,
     view: "notes", // 'notes' | 'trash'
     sort: "modified", // 'modified' | 'created' | 'title'
-    dark: false,
+    themeMode: "auto", // 'auto' | 'light' | 'dark'
+    systemDark: false, // 系统当前是否深色（auto 模式下决定实际配色）
+    dark: false, // 实际生效的深色状态（由 themeMode + systemDark 推导）
     preview: false,
     fontFamily: "",
     fontSize: 16,
@@ -56,6 +80,8 @@
     user: "",
     serverUrl: "http://localhost:3000",
     lastSyncTs: 0,
+    purged: [], // 永久删除的笔记 ID 墓碑
+    dav: { server: "", username: "", password: "", dir: "/easynote" },
   };
 
   /* ---------------- 存储 ---------------- */
@@ -65,12 +91,38 @@
     } catch (e) {
       state.notes = [];
     }
-    state.dark = store.getItem(DARK_KEY) === "1";
+    // 主题：迁移旧的布尔开关；无记录时默认跟随系统
+    var mode = store.getItem(THEME_KEY);
+    if (mode === "auto" || mode === "light" || mode === "dark") {
+      state.themeMode = mode;
+    } else if (store.getItem(DARK_KEY) === "1") {
+      state.themeMode = "dark";
+    } else if (store.getItem(DARK_KEY) === "0") {
+      state.themeMode = "light";
+    } else {
+      state.themeMode = "auto";
+    }
     state.fontFamily = store.getItem(FONT_KEY) || "";
     state.fontSize = parseInt(store.getItem(FONTSIZE_KEY) || "16", 10) || 16;
     state.serverUrl = store.getItem(SERVER_KEY) || "http://localhost:3000";
     state.token = store.getItem(TOKEN_KEY) || "";
     state.user = store.getItem(USER_KEY) || "";
+    try {
+      state.purged = JSON.parse(store.getItem(PURGE_KEY)) || [];
+      if (!Array.isArray(state.purged)) state.purged = [];
+    } catch (e) {
+      state.purged = [];
+    }
+    try {
+      var dav = JSON.parse(store.getItem(DAV_KEY));
+      if (dav && typeof dav === "object") {
+        state.dav.server = dav.server || "";
+        state.dav.username = dav.username || "";
+        state.dav.password = dav.password || "";
+        state.dav.dir = dav.dir || "/easynote";
+      }
+    } catch (e) {}
+    applyTheme();
   }
   function save() {
     store.setItem(STORE_KEY, JSON.stringify(state.notes));
@@ -78,6 +130,39 @@
   }
   function saveLocalOnly() {
     store.setItem(STORE_KEY, JSON.stringify(state.notes));
+  }
+  // 过滤掉已被永久删除（墓碑）的笔记，防止同步时从服务端还原
+  function filterPurged() {
+    if (!state.purged.length) return;
+    var before = state.notes.length;
+    state.notes = state.notes.filter(function (n) {
+      return state.purged.indexOf(n.id) === -1;
+    });
+    if (state.notes.length !== before) saveLocalOnly();
+  }
+
+  /* ---------------- 主题（跟随系统 / 手动） ---------------- */
+  function isSystemDark() {
+    if (window.matchMedia) {
+      try { return window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (e) {}
+    }
+    return state.systemDark;
+  }
+  function applyTheme() {
+    var dark = state.themeMode === "dark" ||
+      (state.themeMode === "auto" && isSystemDark());
+    state.dark = dark;
+    document.body.classList.toggle("dark", dark);
+    // 同步标题栏颜色（Win/Linux 覆盖层、macOS 背景）
+    if (window.electronAPI && window.electronAPI.setTitlebarDark) {
+      window.electronAPI.setTitlebarDark(dark);
+    }
+  }
+  function setThemeMode(mode) {
+    state.themeMode = mode;
+    store.setItem(THEME_KEY, mode);
+    applyTheme();
+    render();
   }
 
   /* ---------------- 工具 ---------------- */
@@ -215,10 +300,17 @@
     el.navSettings = document.getElementById("navSettings");
     el.settingsModal = document.getElementById("settingsModal");
     el.settingsClose = document.getElementById("settingsClose");
+    el.themeModeSelect = document.getElementById("themeModeSelect");
     el.fontSelect = document.getElementById("fontSelect");
     el.fontCustom = document.getElementById("fontCustom");
     el.fontCustomApply = document.getElementById("fontCustomApply");
     el.fontSizeSelect = document.getElementById("fontSizeSelect");
+    el.davUrl = document.getElementById("davUrl");
+    el.davUser = document.getElementById("davUser");
+    el.davPass = document.getElementById("davPass");
+    el.davDir = document.getElementById("davDir");
+    el.btnDavTest = document.getElementById("btnDavTest");
+    el.btnDavExport = document.getElementById("btnDavExport");
     el.navAccount = document.getElementById("navAccount");
     el.navAccountLabel = document.getElementById("navAccountLabel");
     el.accountModal = document.getElementById("accountModal");
@@ -301,7 +393,7 @@
       item.className = "note-item" + (n.id === state.currentId ? " selected" : "");
       var title = document.createElement("div");
       title.className = "note-title";
-      title.innerHTML = escapeHtml(getTitle(n)) + (n.pinned ? ' <span class="pin">📌</span>' : "");
+      title.innerHTML = (n.color ? '<span class="note-color-dot" style="background:' + colorOf(n.color).color + '" title="' + colorOf(n.color).name + '"></span>' : "") + escapeHtml(getTitle(n)) + (n.pinned ? ' <span class="pin">📌</span>' : "");
       var snip = document.createElement("div");
       snip.className = "note-snippet";
       snip.textContent = getSnippet(n) || "没有更多文字";
@@ -329,6 +421,7 @@
     } else {
       el.toolbar.innerHTML =
         '<button data-action="pin" class="' + (note.pinned ? "active" : "") + '" title="置顶 / 取消置顶">📌</button>' +
+        '<button data-action="color" class="' + (note.color ? "active" : "") + '" title="设置颜色标签">●</button>' +
         '<button data-action="markdown" class="' + (note.markdown ? "active" : "") + '" title="开启 / 关闭 Markdown">M↓</button>' +
         '<button data-action="preview" class="' + (state.preview ? "active" : "") + '" title="预览" ' + (note.markdown ? "" : "disabled") + ">👁</button>" +
         '<button data-action="info" title="笔记信息">ⓘ</button>' +
@@ -338,7 +431,9 @@
     }
     var btns = el.toolbar.querySelectorAll("button");
     for (var i = 0; i < btns.length; i++) {
-      btns[i].addEventListener("click", function () {
+      btns[i].addEventListener("click", function (e) {
+        // 阻止冒泡到 document 的全局点击监听，否则本菜单会被立刻关掉
+        if (e && e.stopPropagation) e.stopPropagation();
         handleAction(this.getAttribute("data-action"), note);
       });
     }
@@ -400,7 +495,7 @@
 
   function createNote() {
     var now = Date.now();
-    var note = { id: uid(), content: "", pinned: false, markdown: false, deleted: false, createdDate: now, modifiedDate: now };
+    var note = { id: uid(), content: "", pinned: false, markdown: false, deleted: false, color: "", createdDate: now, modifiedDate: now };
     state.notes.unshift(note);
     state.currentId = note.id;
     state.view = "notes";
@@ -436,11 +531,43 @@
         state.currentId = null; save(); render(); break;
       case "restore":
         note.deleted = false; note.deletedDate = null; save(); render(); break;
-      case "purge":
+      case "purge": {
+        // 记入墓碑再删除：服务端若是合并同步，墓碑可防止笔记被还原
+        if (state.purged.indexOf(note.id) === -1) {
+          state.purged.push(note.id);
+          store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+        }
         state.notes = state.notes.filter(function (n) { return n.id !== note.id; });
         if (state.currentId === note.id) state.currentId = null;
-        save(); render(); break;
+        save(); render();
+        toast("已永久删除");
+        break;
+      }
+      case "color": {
+        var cbtn = el.toolbar.querySelector('[data-action="color"]');
+        var r = cbtn ? cbtn.getBoundingClientRect() : { left: 200, bottom: 80 };
+        openColorMenu(r.left, r.bottom + 4, note);
+        break;
+      }
     }
+  }
+
+  // 颜色标签选择菜单
+  function openColorMenu(x, y, note) {
+    var items = COLOR_PALETTE.map(function (c) {
+      return {
+        label: (c.color ? "● " : "○ ") + c.name,
+        color: c.color || null,
+        action: function () {
+          note.color = c.key;
+          note.modifiedDate = Date.now();
+          save();
+          render();
+          toast(c.key ? "已设置颜色：" + c.name : "已清除颜色");
+        },
+      };
+    });
+    showCtxMenu(x, y, items);
   }
 
   function showInfo(note) {
@@ -456,7 +583,7 @@
       "<p><b>最后同步：</b>" + lastSync + "</p>" +
       "<p><b>字符数：</b>" + content.length + "　<b>词数：</b>" + words + "</p>" +
       "<p><b>标签：</b>" + (tags.length ? tags.map(function (t) { return "#" + t; }).join(" ") : "无") + "</p>" +
-      "<p><b>Markdown：</b>" + (note.markdown ? "已开启" : "未开启") + "　<b>置顶：</b>" + (note.pinned ? "是" : "否") + "</p>";
+      "<p><b>颜色：</b>" + (note.color ? colorOf(note.color).name : "无") + "　<b>Markdown：</b>" + (note.markdown ? "已开启" : "未开启") + "　<b>置顶：</b>" + (note.pinned ? "是" : "否") + "</p>";
     el.infoModal.hidden = false;
   }
 
@@ -535,9 +662,8 @@
       state.view = "trash"; render();
     });
     el.navDark.addEventListener("click", function () {
-      state.dark = !state.dark;
-      store.setItem(DARK_KEY, state.dark ? "1" : "0");
-      render();
+      // 点击切换到与当前生效状态相反的模式（显式指定，不再跟随系统）
+      setThemeMode(state.dark ? "light" : "dark");
     });
     el.navExport.addEventListener("click", exportAll);
     el.navImport.addEventListener("click", function () { el.importFile.click(); });
@@ -608,6 +734,12 @@
     el.settingsModal.addEventListener("click", function (e) {
       if (e.target === el.settingsModal) el.settingsModal.hidden = true;
     });
+    if (el.themeModeSelect) {
+      el.themeModeSelect.addEventListener("change", function () {
+        setThemeMode(el.themeModeSelect.value);
+        toast("主题已切换");
+      });
+    }
     el.fontSelect.addEventListener("change", function () {
       state.fontFamily = el.fontSelect.value;
       store.setItem(FONT_KEY, state.fontFamily);
@@ -622,6 +754,8 @@
     el.fontCustom.addEventListener("keydown", function (e) {
       if (e.key === "Enter") applyCustomFont();
     });
+    if (el.btnDavTest) el.btnDavTest.addEventListener("click", testDav);
+    if (el.btnDavExport) el.btnDavExport.addEventListener("click", exportToDav);
 
     document.addEventListener("keydown", function (e) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") {
@@ -633,9 +767,13 @@
   }
 
   /* ---------------- 字体设置 ---------------- */
+  // 空选择 = 跟随系统字体栈
+  var SYSTEM_FONT_STACK =
+    '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", ' +
+    '"Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans CN", sans-serif';
   function applySettings() {
     var stack = state.fontFamily ? '"' + state.fontFamily + '", ' : "";
-    stack += '"PingFang SC","Microsoft YaHei","Hiragino Sans GB","Source Han Sans CN",sans-serif';
+    stack += SYSTEM_FONT_STACK;
     document.documentElement.style.setProperty("--font", stack);
     document.documentElement.style.setProperty("--editor-fs", (state.fontSize || 16) + "px");
   }
@@ -645,7 +783,7 @@
     el.fontSelect.innerHTML = "";
     var def = document.createElement("option");
     def.value = "";
-    def.textContent = "默认（系统推荐）";
+    def.textContent = "默认（跟随系统）";
     el.fontSelect.appendChild(def);
     fonts.forEach(function (f) {
       var o = document.createElement("option");
@@ -653,10 +791,29 @@
       o.textContent = f;
       el.fontSelect.appendChild(o);
     });
+    // 当前选中的字体若不在列表里（自定义），补一个选项防止显示错位
+    if (state.fontFamily) {
+      var exists = false;
+      var opts = el.fontSelect.options;
+      for (var i = 0; i < opts.length; i++) {
+        if (opts[i].value === state.fontFamily) { exists = true; break; }
+      }
+      if (!exists) {
+        var o2 = document.createElement("option");
+        o2.value = state.fontFamily;
+        o2.textContent = state.fontFamily + "（自定义）";
+        el.fontSelect.appendChild(o2);
+      }
+    }
     el.fontSelect.value = state.fontFamily || "";
   }
 
   function openSettings() {
+    if (el.themeModeSelect) el.themeModeSelect.value = state.themeMode;
+    if (el.davUrl) el.davUrl.value = state.dav.server || "";
+    if (el.davUser) el.davUser.value = state.dav.username || "";
+    if (el.davPass) el.davPass.value = state.dav.password || "";
+    if (el.davDir) el.davDir.value = state.dav.dir || "/easynote";
     var fonts = FALLBACK_FONTS.slice();
     if (window.electronAPI && typeof window.electronAPI.getSystemFonts === "function") {
       window.electronAPI.getSystemFonts().then(function (list) {
@@ -745,6 +902,7 @@
       pinned: !!n.pinned,
       markdown: !!n.markdown,
       deleted: !!n.deleted,
+      color: n.color || "",
       createdDate: n.createdDate || Date.now(),
       modifiedDate: n.modifiedDate || Date.now(),
       deletedDate: n.deletedDate || null,
@@ -840,6 +998,7 @@
       .then(function (res) {
         if (res && res.notes) {
           state.notes = res.notes;
+          filterPurged(); // 服务端若仍保留已永久删除的笔记，本地用墓碑过滤掉
           saveLocalOnly();
           render();
         }
@@ -853,7 +1012,56 @@
   }
   function pullOnly() {
     return api("/api/notes", { method: "GET" }).then(function (res) {
-      if (res && res.notes) state.notes = res.notes;
+      if (res && res.notes) {
+        state.notes = res.notes;
+        filterPurged();
+      }
+    });
+  }
+
+  /* ---------------- WebDAV 导出 ---------------- */
+  function saveDavConfig() {
+    state.dav.server = (el.davUrl.value || "").trim();
+    state.dav.username = (el.davUser.value || "").trim();
+    state.dav.password = el.davPass.value || "";
+    state.dav.dir = (el.davDir.value || "").trim() || "/easynote";
+    store.setItem(DAV_KEY, JSON.stringify(state.dav));
+  }
+  function davConfig() {
+    return {
+      server: (el.davUrl.value || "").trim(),
+      username: (el.davUser.value || "").trim(),
+      password: el.davPass.value || "",
+      dir: (el.davDir.value || "").trim() || "/easynote",
+    };
+  }
+  function testDav() {
+    var cfg = davConfig();
+    if (!cfg.server) { toast("请先填写 WebDAV 服务器地址"); return; }
+    saveDavConfig();
+    toast("正在测试连接…");
+    window.electronAPI.webdavTest(cfg).then(function (r) {
+      if (r.ok) {
+        toast(r.needMkcol ? "连接成功（目录不存在，导出时会自动创建）" : "连接成功");
+      } else {
+        toast("连接失败：" + (r.error || "未知错误"));
+      }
+    });
+  }
+  function exportToDav() {
+    var cfg = davConfig();
+    if (!cfg.server) { toast("请先填写 WebDAV 服务器地址"); return; }
+    if (!state.notes.length) { toast("没有可导出的笔记"); return; }
+    saveDavConfig();
+    toast("正在导出 " + state.notes.length + " 条笔记…");
+    window.electronAPI.webdavExport(cfg, state.notes.map(serializeNote)).then(function (r) {
+      if (r.ok) {
+        toast("导出完成：" + r.count + "/" + r.total + " 条 → " + r.url);
+      } else if (typeof r.count === "number") {
+        toast("部分失败：" + r.count + "/" + r.total + "，失败 " + r.failed.length + " 条");
+      } else {
+        toast("导出失败：" + (r.error || "未知错误"));
+      }
     });
   }
 
@@ -882,6 +1090,7 @@
       row.className = "ctx-item" + (it.danger ? " danger" : "");
       var lbl = document.createElement("span");
       lbl.textContent = it.label;
+      if (it.color) lbl.style.color = it.color;
       row.appendChild(lbl);
       if (it.shortcut) {
         var sc = document.createElement("span");
@@ -912,6 +1121,7 @@
     var items = [
       { label: note.pinned ? "取消置顶" : "置顶", action: function () { handleAction("pin", note); } },
       { label: note.markdown ? "关闭 Markdown" : "开启 Markdown", action: function () { handleAction("markdown", note); } },
+      { label: "设置颜色…", color: note.color ? colorOf(note.color).color : null, action: function () { handleAction("color", note); } },
       { sep: true },
       { label: "复制内部链接", action: function () { copyInternalLink(note); } },
       { label: "复制内容到剪贴板", action: function () { handleAction("share", note); } },
@@ -968,9 +1178,37 @@
   function init() {
     cacheDom();
     load();
+    filterPurged(); // 启动即过滤墓碑，防止已删笔记复活
     applySettings();
     bindEvents();
     updateAccountUI();
+    // 跟随系统深浅色：主进程系统主题变化 / 浏览器环境媒体查询
+    if (window.electronAPI && window.electronAPI.onSystemThemeChanged) {
+      window.electronAPI.onSystemThemeChanged(function (dark) {
+        state.systemDark = !!dark;
+        if (state.themeMode === "auto") {
+          applyTheme();
+          render();
+        }
+      });
+    }
+    if (window.matchMedia) {
+      try {
+        window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () {
+          if (state.themeMode === "auto") {
+            applyTheme();
+            render();
+          }
+        });
+      } catch (e) {}
+    }
+    // 标题栏双击最大化 / 还原
+    var strip = document.getElementById("titlebarStrip");
+    if (strip && window.electronAPI && window.electronAPI.toggleMaximize) {
+      strip.addEventListener("dblclick", function () {
+        window.electronAPI.toggleMaximize();
+      });
+    }
     if (state.token) {
       setSyncStatus("同步中…");
       pullOnly()

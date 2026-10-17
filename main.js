@@ -1,47 +1,110 @@
 /* ============ Electron 主进程 ============ */
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme } = require("electron");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execSync, execFile } = require("child_process");
 
 const APP_VERSION = app.getVersion();
 const REPO_OWNER = "feibixunchang";
 const REPO_NAME = "easynote";
 
-// 枚举 Windows 已安装字体（读取系统字体注册表）
+// 主题色：与界面 CSS 变量保持一致（浅色 #f7f7f7 侧栏 / 深色 #252525）
+// 标题栏用编辑器背景色，视觉上与主界面连成一体
+const THEME_COLORS = {
+  light: { bg: "#ffffff", fg: "#333333" },
+  dark: { bg: "#1e1e1e", fg: "#e2e2e2" },
+};
+
+// 枚举本机已安装字体（按平台分别实现）
 function getSystemFonts() {
   try {
-    const out = execSync(
-      'reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts" /s',
-      { encoding: "utf8", windowsHide: true }
-    );
-    const names = new Set();
-    out.split("\n").forEach(function (line) {
-      const m = line.match(/(.+?)\s+REG_SZ\s+\S/);
-      if (m) {
-        let name = m[1]
-          .replace(/\s*\((TrueType|OpenType|OpenType CFF|Type 1)\)\s*$/i, "")
-          .trim();
-        if (name) names.add(name);
-      }
-    });
-    return [...names].sort();
+    if (process.platform === "win32") return getWindowsFonts();
+    if (process.platform === "darwin") return getMacFonts();
+    return getLinuxFonts();
   } catch (e) {
     return [];
   }
+}
+function getWindowsFonts() {
+  const out = execSync(
+    'reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts" /s',
+    { encoding: "utf8", windowsHide: true }
+  );
+  const names = new Set();
+  out.split("\n").forEach(function (line) {
+    const m = line.match(/(.+?)\s+REG_SZ\s+\S/);
+    if (m) {
+      let name = m[1]
+        .replace(/\s*\((TrueType|OpenType|OpenType CFF|Type 1)\)\s*$/i, "")
+        .trim();
+      if (name) names.add(name);
+    }
+  });
+  return [...names].sort();
+}
+function getMacFonts() {
+  // macOS：system_profiler 输出所有字体族（可能耗时几秒）
+  const out = execSync("system_profiler SPFontsDataType -json", {
+    encoding: "utf8",
+    timeout: 15000,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  const data = JSON.parse(out);
+  const names = new Set();
+  (data.SPFontsDataType || []).forEach(function (entry) {
+    if (entry.family) names.add(String(entry.family).trim());
+    (entry.typefaces || []).forEach(function (t) {
+      if (t.family) names.add(String(t.family).trim());
+    });
+  });
+  return [...names].filter(Boolean).sort();
+}
+function getLinuxFonts() {
+  // Linux：fontconfig 列出字体族名（fc-list 属于 fontconfig 包，桌面环境必装）
+  const out = execSync("fc-list : family", { encoding: "utf8", timeout: 15000 });
+  const names = new Set();
+  out.split("\n").forEach(function (line) {
+    // 一行可能含多个字体族（逗号分隔）
+    line.split(",").forEach(function (f) {
+      f = f.trim();
+      if (f) names.add(f);
+    });
+  });
+  return [...names].sort();
 }
 
 ipcMain.handle("get-system-fonts", function () {
   return getSystemFonts();
 });
 
+/* ============ 标题栏与主界面一体色 ============ */
+// Windows / Linux：隐藏系统标题栏 + 原生窗口按钮覆盖层（颜色随主题）
+// macOS：隐藏标题栏保留交通灯，背景色随主题
+function applyTitlebarTheme(win, dark) {
+  const c = dark ? THEME_COLORS.dark : THEME_COLORS.light;
+  if (process.platform === "darwin") {
+    win.setBackgroundColor(c.bg);
+  } else if (typeof win.setTitleBarOverlay === "function") {
+    win.setTitleBarOverlay({ color: c.bg, symbolColor: c.fg });
+  }
+}
+
 function createWindow() {
+  const dark = nativeTheme.shouldUseDarkColors;
+  const c = dark ? THEME_COLORS.dark : THEME_COLORS.light;
+  const isMac = process.platform === "darwin";
   const win = new BrowserWindow({
     width: 1100,
     height: 720,
     minWidth: 820,
     minHeight: 520,
-    backgroundColor: "#ffffff",
+    backgroundColor: c.bg,
     title: "简易笔记",
+    // 隐藏系统标题栏，让标题区域与主界面同色：
+    // Win/Linux 用原生窗口按钮覆盖层，macOS 保留左上角交通灯
+    titleBarStyle: isMac ? "hiddenInset" : "hidden",
+    ...(isMac
+      ? {}
+      : { titleBarOverlay: { color: c.bg, symbolColor: c.fg, height: 34 } }),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -50,6 +113,7 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, "index.html"));
+  applyTitlebarTheme(win, dark);
 
   // 关闭窗口时隐藏到托盘（托盘菜单里可真正退出）
   win.on("close", function (e) {
@@ -258,6 +322,124 @@ ipcMain.handle("open-external", function (_e, url) {
   }
 });
 
+ipcMain.handle("set-titlebar-dark", function (_e, dark) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    applyTitlebarTheme(mainWindow, !!dark);
+  }
+});
+
+ipcMain.handle("toggle-maximize", function () {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+});
+
+/* ============ WebDAV 导出 ============ */
+function webdavAuth(user, pass) {
+  return "Basic " + Buffer.from(user + ":" + pass).toString("base64");
+}
+function normalizeDavUrl(u) {
+  u = (u || "").trim().replace(/\/+$/, "");
+  if (!u) return "";
+  if (!/^https?:\/\//i.test(u)) u = "http://" + u;
+  return u;
+}
+// 探测 WebDAV 连通性：PROPFIND 目标目录
+async function davTest(cfg) {
+  const base = normalizeDavUrl(cfg.server);
+  if (!base) return { ok: false, error: "请填写服务器地址" };
+  const dir = (cfg.dir || "/easynote").replace(/^\/+|\/+$/g, "");
+  const url = base + "/" + dir + "/";
+  const res = await fetch(url, {
+    method: "PROPFIND",
+    headers: {
+      Authorization: webdavAuth(cfg.username || "", cfg.password || ""),
+      Depth: "0",
+    },
+  });
+  // 200/207 = 目录存在；401 = 账号密码错；404 = 目录不存在（可创建）
+  if (res.status === 401 || res.status === 403) {
+    return { ok: false, error: "认证失败，请检查用户名和密码" };
+  }
+  if (res.status === 404) return { ok: true, needMkcol: true, url: url };
+  if (res.ok || res.status === 207) return { ok: true, url: url };
+  return { ok: false, error: "服务器返回 HTTP " + res.status };
+}
+async function davMkcol(url, cfg) {
+  const res = await fetch(url, {
+    method: "MKCOL",
+    headers: { Authorization: webdavAuth(cfg.username || "", cfg.password || "") },
+  });
+  // 405 = 目录已存在，视为成功
+  if (res.ok || res.status === 405) return;
+  throw new Error("创建目录失败（HTTP " + res.status + "）");
+}
+async function davPut(url, cfg, content, type) {
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: webdavAuth(cfg.username || "", cfg.password || ""),
+      "Content-Type": type || "text/plain; charset=utf-8",
+    },
+    body: content,
+  });
+  if (!res.ok && res.status !== 204 && res.status !== 201) {
+    throw new Error("上传失败（HTTP " + res.status + "）");
+  }
+}
+function safeFileName(name) {
+  return String(name || "")
+    .replace(/[\\/:*?"<>| -]/g, "_")
+    .slice(0, 60) || "note";
+}
+ipcMain.handle("webdav-test", function (_e, cfg) {
+  return davTest(cfg).catch(function (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  });
+});
+ipcMain.handle("webdav-export", function (_e, cfg, notes) {
+  return (async function () {
+    const base = normalizeDavUrl(cfg.server);
+    if (!base) return { ok: false, error: "请先填写 WebDAV 服务器地址" };
+    if (!Array.isArray(notes)) return { ok: false, error: "没有可导出的笔记" };
+    const dir = (cfg.dir || "/easynote").replace(/^\/+|\/+$/g, "");
+    const prefix = base + "/" + dir + "/";
+    const auth = { username: cfg.username || "", password: cfg.password || "" };
+
+    // 1. 确保目录存在
+    const t = await davTest(cfg);
+    if (!t.ok) return t;
+    if (t.needMkcol) await davMkcol(prefix, auth);
+
+    // 2. 全量 JSON 备份
+    const stamp = new Date().toISOString().slice(0, 10);
+    await davPut(prefix + "easynote-backup-" + stamp + ".json", auth,
+      JSON.stringify({ version: APP_VERSION, exportedAt: new Date().toISOString(), notes: notes }, null, 2),
+      "application/json; charset=utf-8");
+
+    // 3. 每条笔记一个 Markdown 文件
+    let okCount = 0;
+    const failed = [];
+    for (const n of notes) {
+      const title = ((n.content || "").split("\n").find(function (l) { return l.trim(); }) || "无标题").trim();
+      const md =
+        "# " + title + "\n\n" +
+        "- 创建时间：" + new Date(n.createdDate || Date.now()).toLocaleString("zh-CN") + "\n" +
+        "- 修改时间：" + new Date(n.modifiedDate || Date.now()).toLocaleString("zh-CN") + "\n" +
+        (n.deleted ? "- 状态：回收站\n" : "") + "\n---\n\n" + (n.content || "");
+      try {
+        await davPut(prefix + safeFileName(title) + "-" + n.id + ".md", auth, md, "text/markdown; charset=utf-8");
+        okCount++;
+      } catch (e) {
+        failed.push(title + "：" + e.message);
+      }
+    }
+    return { ok: failed.length === 0, count: okCount, total: notes.length, failed: failed, url: prefix };
+  })().catch(function (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  });
+});
+
 // 中文菜单（Windows / macOS / Linux 通用）
 function buildMenu(win) {
   const isMac = process.platform === "darwin";
@@ -348,6 +530,14 @@ app.whenReady().then(() => {
   // 启动 5 秒后静默检查一次更新，之后每 6 小时一次
   setTimeout(() => checkUpdate(false), 5000);
   setInterval(() => checkUpdate(false), 6 * 60 * 60 * 1000);
+  // 系统深浅色变化时推送给渲染进程（跟随系统模式）
+  nativeTheme.on("updated", () => {
+    [mainWindow, ...BrowserWindow.getAllWindows()].forEach(function (w) {
+      if (w && !w.isDestroyed()) {
+        w.webContents.send("system-theme-changed", nativeTheme.shouldUseDarkColors);
+      }
+    });
+  });
   app.on("activate", () => {
     showWindow();
   });
