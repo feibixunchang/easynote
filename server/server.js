@@ -53,8 +53,21 @@ function auth(req, res, next) {
 }
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: true,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json());
+// 请求日志：便于排查客户端（如 Mac/手机）是否连得上、请求是否到达
+app.use(function (req, res, next) {
+  var ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
+  console.log(
+    new Date().toISOString() + " " + req.method + " " + req.originalUrl +
+    " ip=" + ip + " origin=" + (req.headers.origin || "-")
+  );
+  next();
+});
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
@@ -106,10 +119,14 @@ app.post("/api/notes/sync", auth, (req, res) => {
 });
 
 app.listen(PORT, HOST, () => {
+  const inDocker = require("fs").existsSync("/.dockerenv");
   const ips = getLocalIps();
   console.log("简易笔记云同步服务已启动");
   console.log("本机访问：http://localhost:" + PORT);
-  if (ips.length) {
+  if (inDocker) {
+    console.log("检测到运行在 Docker 容器中：外部设备请使用【宿主机(NAS)】的局域网 IP 访问，");
+    console.log("例如 http://192.168.1.100:" + PORT + "（请勿使用容器内部地址）");
+  } else if (ips.length) {
     console.log("其他设备请用下面的「局域网地址」登录：");
     ips.forEach(function (ip) {
       console.log("   http://" + ip + ":" + PORT + "    （" + ipLabel(ip) + "）");
@@ -118,7 +135,10 @@ app.listen(PORT, HOST, () => {
   console.log("监听地址：" + HOST + ":" + PORT + "（0.0.0.0 表示所有网卡，局域网均可访问）");
 });
 
-// 常见局域网网段优先，VPN/虚拟网卡地址排在后面
+// 常见局域网网段优先，VPN/虚拟网卡地址排在后面；Docker 网桥段(172.17~172.31)不展示
+function isDockerRange(ip) {
+  return /^172\.(1[7-9]|2\d|3[01])\./.test(ip);
+}
 function getLocalIps() {
   const nets = require("os").networkInterfaces();
   const lan = [];
@@ -126,7 +146,8 @@ function getLocalIps() {
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
       if ((net.family === "IPv4" || net.family === 4) && !net.internal) {
-        if (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(net.address)) lan.push(net.address);
+        if (isDockerRange(net.address)) continue;
+        if (/^(192\.168\.|10\.)/.test(net.address)) lan.push(net.address);
         else other.push(net.address);
       }
     }

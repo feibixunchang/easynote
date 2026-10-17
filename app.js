@@ -228,6 +228,7 @@
     el.accPass = document.getElementById("accPass");
     el.btnLogin = document.getElementById("btnLogin");
     el.btnRegister = document.getElementById("btnRegister");
+    el.btnTestConn = document.getElementById("btnTestConn");
     el.btnSync = document.getElementById("btnSync");
     el.btnLogout = document.getElementById("btnLogout");
     el.accLoggedOut = document.getElementById("accLoggedOut");
@@ -549,6 +550,7 @@
     });
     el.btnLogin.addEventListener("click", function () { doAuth(false); });
     el.btnRegister.addEventListener("click", function () { doAuth(true); });
+    if (el.btnTestConn) el.btnTestConn.addEventListener("click", testConnection);
     el.btnSync.addEventListener("click", function () { syncAll(); });
     el.btnLogout.addEventListener("click", logout);
 
@@ -695,8 +697,15 @@
   }
 
   /* ---------------- 云同步 / 账号 ---------------- */
+  // 规范化服务端地址：自动补 http:// 前缀、去尾部斜杠；空值回退默认地址
+  function normalizeServerUrl(u) {
+    u = (u || "").trim().replace(/\/+$/, "");
+    if (!u) return "http://localhost:3000";
+    if (!/^https?:\/\//i.test(u)) u = "http://" + u;
+    return u;
+  }
   function getServerUrl() {
-    return (state.serverUrl || "http://localhost:3000").replace(/\/+$/, "");
+    return normalizeServerUrl(state.serverUrl);
   }
   function authHeaders() {
     var h = { "Content-Type": "application/json" };
@@ -709,15 +718,24 @@
     if (opts.headers) {
       Object.keys(opts.headers).forEach(function (k) { headers[k] = opts.headers[k]; });
     }
-    return fetch(getServerUrl() + path, {
+    var url = getServerUrl() + path;
+    return fetch(url, {
       method: opts.method || "GET",
       headers: headers,
       body: opts.body,
     }).then(function (r) {
-      return r.json().then(function (data) {
-        if (!r.ok) throw new Error((data && data.error) ? data.error : "请求失败 (" + r.status + ")");
-        return data;
+      return r.text().then(function (txt) {
+        var data = null;
+        try { data = txt ? JSON.parse(txt) : null; } catch (e) {}
+        if (!r.ok) throw new Error((data && data.error) ? data.error : "服务器返回错误 (" + r.status + ")");
+        return data || {};
       });
+    }).catch(function (e) {
+      // 网络层失败（连不上/被拦截）时，把技术性的 "Failed to fetch" 换成可操作的中文提示
+      if (e && e.message && /failed to fetch|load failed|networkerror/i.test(e.message)) {
+        throw new Error("无法连接服务器 " + url + "。请检查：① 地址是否填对（填 IP:端口 即可，会自动补 http://）② 服务端是否已启动 ③ 本机与服务端是否在同一局域网");
+      }
+      throw e;
     });
   }
   function serializeNote(n) {
@@ -749,15 +767,16 @@
     }
   }
   function openAccount() {
-    if (el.serverUrl) el.serverUrl.value = state.serverUrl || "http://localhost:3000";
+    if (el.serverUrl) el.serverUrl.value = normalizeServerUrl(state.serverUrl);
     updateAccountUI();
     el.accountModal.hidden = false;
   }
   function doAuth(isRegister) {
     var u = (el.accUser.value || "").trim();
     var p = el.accPass.value || "";
-    var server = (el.serverUrl.value || "").trim() || "http://localhost:3000";
+    var server = normalizeServerUrl((el.serverUrl.value || "").trim());
     if (!u || !p) { toast("请输入用户名和密码"); return; }
+    el.serverUrl.value = server;
     state.serverUrl = server;
     store.setItem(SERVER_KEY, server);
     setSyncStatus(isRegister ? "注册中…" : "登录中…");
@@ -786,6 +805,26 @@
     store.removeItem(USER_KEY);
     updateAccountUI();
     toast("已退出登录");
+  }
+  // 测试与服务端的连通性，立即反馈结果，便于定位问题
+  function testConnection() {
+    var server = normalizeServerUrl((el.serverUrl.value || "").trim());
+    el.serverUrl.value = server;
+    setSyncStatus("正在测试连接 " + server + " …");
+    fetch(server + "/api/health")
+      .then(function (r) {
+        if (r.ok) {
+          setSyncStatus("连接成功：" + server);
+          toast("连接成功：" + server);
+        } else {
+          setSyncStatus("服务器有响应，但状态异常（HTTP " + r.status + "）");
+          toast("连接异常：HTTP " + r.status);
+        }
+      })
+      .catch(function () {
+        setSyncStatus("连接失败：" + server);
+        toast("连接失败：" + server + "，请检查地址、服务端与网络");
+      });
   }
   var syncTimer;
   function scheduleSync() {
