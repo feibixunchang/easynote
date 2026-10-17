@@ -118,6 +118,7 @@
           <label>服务端地址</label>
           <input id="serverUrl" placeholder="http://localhost:3000" />
         </div>
+        <p class="modal-sub" style="margin-top:-6px">填 <b>IP:端口</b> 即可（自动补 http://）。局域网示例：http://192.168.100.3:3050；不确定时先点「测试连接」。</p>
         <div class="setting-row">
           <label>用户名</label>
           <input id="accUser" placeholder="你的账号" />
@@ -127,6 +128,7 @@
           <input id="accPass" type="password" placeholder="至少 6 位" />
         </div>
         <div class="modal-actions" style="text-align:left">
+          <button id="btnTestConn">测试连接</button>
           <button id="btnLogin" class="primary">登录</button>
           <button id="btnRegister">注册</button>
         </div>
