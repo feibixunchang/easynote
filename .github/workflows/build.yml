@@ -10,6 +10,8 @@ on:
 
 jobs:
   build:
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -34,7 +36,9 @@ jobs:
       - name: 安装 Linux 系统依赖（打包 deb/rpm 需要）
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg rpm
-      - name: 打包
+      - name: 打包并发布到 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run ${{ matrix.script }}
       - name: 收集安装包
         shell: bash

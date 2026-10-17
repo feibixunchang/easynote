@@ -824,6 +824,12 @@
       seedIfEmpty();
       render();
     }
+    if (window.electronAPI && window.electronAPI.onMenuNewNote) {
+      window.electronAPI.onMenuNewNote(function () {
+        var b = document.getElementById("newNoteBtn");
+        if (b) b.click();
+      });
+    }
   }
 
   init();
