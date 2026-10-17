@@ -10,6 +10,7 @@
     "pack": "electron-builder --dir",
     "dist:win": "electron-builder --win --x64 --publish always",
     "dist:mac": "electron-builder --mac --universal --publish always",
+    "dist:mac:local": "electron-builder --mac --universal --publish never",
     "dist:linux": "electron-builder --linux --x64 --publish always",
     "dist:all": "electron-builder --win --mac --linux --publish always"
   },

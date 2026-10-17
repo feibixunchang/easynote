@@ -38,6 +38,21 @@ npm run dist:linux         # 打包 Linux 安装包（AppImage + deb）
 > 跨平台说明：在 Windows 上只能打包 Windows 安装包；macOS / Linux 安装包需在对应系统上执行上述命令，
 > 或在仓库中打一个 `v*` 标签触发 `.github/workflows/build.yml`（GitHub Actions）自动并行产出三端安装包。
 
+### ⚠️ macOS 用户注意：GitHub 下载的 dmg 可能被 Gatekeeper 拦截
+
+CI 上没有苹果开发者证书，产出的 `.app` 只是 **ad-hoc 签名**（有 CodeDirectory、无 CMS 签名、无公证票据）。
+这种包在 macOS 15（Sequoia）及以后从浏览器下载后，会被 Gatekeeper 以「已阻止…并移到废纸篓，因其包含恶意软件」拦下，
+`xattr -cr` 也不一定救得回来。
+
+**最稳的办法是在 Mac 上本地打包一次**（本机构建的应用不带隔离标记，Gatekeeper 完全不介入）：
+
+```bash
+bash build-mac-local.sh      # 自动检查 Node / Xcode 工具链 → 产出 dist/*.dmg
+```
+
+其他办法（清隔离标记 / 临时关 Gatekeeper）见《三端构建与安装说明.md》第三节。
+要彻底免去这一步，需要购买 Apple 开发者账号（$99/年）在 CI 里配置签名 + 公证。
+
 ### 方式三：开启云同步（多设备）
 云同步需要一个后端服务（`server/` 目录，纯 Node.js，无需数据库）：
 
@@ -60,6 +75,7 @@ npm start                  # 默认监听 http://localhost:3000
 | `main.js` | Electron 主进程（外壳，含系统字体枚举） |
 | `preload.js` | Electron 预加载脚本（向渲染进程暴露字体枚举接口） |
 | `package.json` | 运行 / 三端打包配置 |
+| `build-mac-local.sh` | 在 Mac 上本地打包，绕开 Gatekeeper 拦截 |
 | `server/` | 云同步服务端（Express + JWT + 文件存储） |
 | `.github/workflows/build.yml` | GitHub Actions 三端自动打包工作流 |
 
