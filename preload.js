@@ -10,4 +10,35 @@ contextBridge.exposeInMainWorld("electronAPI", {
       cb();
     });
   },
+  getAppVersion: function () {
+    return ipcRenderer.invoke("get-app-version");
+  },
+  checkUpdate: function () {
+    return ipcRenderer.invoke("check-update");
+  },
+  openExternal: function (url) {
+    return ipcRenderer.invoke("open-external", url);
+  },
+  onUpdateAvailable: function (cb) {
+    ipcRenderer.on("update-available", function (_e, info) {
+      cb(info);
+    });
+  },
+  setTitlebarDark: function (dark) {
+    return ipcRenderer.invoke("set-titlebar-dark", dark);
+  },
+  toggleMaximize: function () {
+    return ipcRenderer.invoke("toggle-maximize");
+  },
+  onSystemThemeChanged: function (cb) {
+    ipcRenderer.on("system-theme-changed", function (_e, dark) {
+      cb(dark);
+    });
+  },
+  webdavTest: function (cfg) {
+    return ipcRenderer.invoke("webdav-test", cfg);
+  },
+  webdavExport: function (cfg, notes) {
+    return ipcRenderer.invoke("webdav-export", cfg, notes);
+  },
 });

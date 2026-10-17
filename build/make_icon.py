@@ -55,3 +55,16 @@ d.line([(lx1 - 70, ny1 - 60), (lx1 - 54, ny1 - 88)], fill=(255, 255, 255, 255), 
 
 img.save("build/icon.png")
 print("saved", img.size)
+
+# 同步生成 Linux 多尺寸图标集。
+# electron-builder 的 linux.icon 指向该目录时，会按 hicolor 规范把各尺寸图标
+# 安装到 /usr/share/icons/hicolor/<NxN>/apps/；若只给单张 PNG，已知 bug 会把它
+# 装进 hicolor/0x0/ 非法目录，导致 Deepin/UOS 等桌面启动器检索不到图标。
+import os
+
+ICON_DIR = "build/icons"
+SIZES = (16, 24, 32, 48, 64, 96, 128, 256, 512, 1024)
+os.makedirs(ICON_DIR, exist_ok=True)
+for s in SIZES:
+    img.resize((s, s), Image.LANCZOS).save(f"{ICON_DIR}/{s}x{s}.png")
+print("saved iconset", ICON_DIR, [f"{s}x{s}.png" for s in SIZES])

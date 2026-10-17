@@ -75,6 +75,8 @@ npm start                  # 默认监听 http://localhost:3000
 | `main.js` | Electron 主进程（外壳，含系统字体枚举） |
 | `preload.js` | Electron 预加载脚本（向渲染进程暴露字体枚举接口） |
 | `package.json` | 运行 / 三端打包配置 |
+| `build/make_icon.py` | 生成应用图标（`build/icon.png` + `build/icons/` 多尺寸集） |
+| `build/icons/` | Linux 多尺寸图标（16~1024），`linux.icon` 指向此目录，勿删 |
 | `build-mac-local.sh` | 在 Mac 上本地打包，绕开 Gatekeeper 拦截 |
 | `server/` | 云同步服务端（Express + JWT + 文件存储） |
 | `.github/workflows/build.yml` | GitHub Actions 三端自动打包工作流 |

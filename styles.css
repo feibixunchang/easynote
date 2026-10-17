@@ -1,8 +1,9 @@
 /* ============ 简易笔记 · Simplenote 风格 ============ */
 :root {
-  --font: "PingFang SC", "Microsoft YaHei", "微软雅黑", "Hiragino Sans GB",
-    "Source Han Sans CN", "Noto Sans CJK SC", -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, sans-serif;
+  /* 默认（跟随系统）：空选择时用系统字体栈，macOS 用 SF/苹方，Windows 用 Segoe UI/雅黑，Linux 用 Noto Sans CJK */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", "Hiragino Sans GB", "Noto Sans CJK SC",
+    "Source Han Sans CN", Roboto, sans-serif;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, "Courier New", monospace;
 
   --bg: #ffffff;
@@ -47,11 +48,34 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 顶部标题栏：与主界面同色，整条是窗口拖拽区；
+   Win/Linux 右上角、macOS 左上角的系统原生窗口按钮悬浮在这一层之上 */
+.titlebar-strip {
+  flex: 0 0 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+  app-region: drag;
+  user-select: none;
+}
+.titlebar-title {
+  font-size: 12px;
+  color: var(--text-mute);
+  letter-spacing: 0.5px;
 }
 
 .app {
   display: flex;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   width: 100vw;
 }
 
@@ -68,12 +92,53 @@ body {
 
 .sidebar-header {
   padding: 18px 18px 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 .logo {
   font-size: 17px;
   font-weight: 700;
   letter-spacing: 0.5px;
   color: var(--accent);
+}
+.version-badge {
+  font-size: 11px;
+  color: var(--text-mute);
+  cursor: default;
+}
+
+/* 更新提示条 */
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 10px 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  font-size: 12px;
+  color: var(--accent);
+}
+.update-banner[hidden] { display: none; }
+.update-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.update-actions button {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.update-actions button#updateDismissBtn {
+  background: transparent;
+  color: var(--accent);
+  padding: 3px 5px;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .search-wrap { padding: 4px 14px 12px; }
@@ -184,6 +249,14 @@ body {
 }
 .note-item:hover { background: var(--hover); }
 .note-item.selected { background: var(--sel); }
+/* 颜色标签：标题前的小圆点 */
+.note-color-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
 .note-title {
   font-size: 14px;
   font-weight: 600;
@@ -361,6 +434,10 @@ button.primary:hover { filter: brightness(1.05); }
   justify-content: space-between;
   gap: 12px;
   margin: 14px 0;
+}
+.setting-sep {
+  border-top: 1px solid var(--border);
+  margin: 18px 0 6px;
 }
 .setting-row label { font-size: 13.5px; color: var(--text); flex: 0 0 auto; }
 .setting-row select,
