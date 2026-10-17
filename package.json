@@ -29,7 +29,8 @@
       "app.js",
       "main.js",
       "preload.js",
-      "build/icon.png"
+      "build/icon.png",
+      "build/icons/**"
     ],
     "win": {
       "target": "nsis",
