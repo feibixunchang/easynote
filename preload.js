@@ -24,4 +24,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
       cb(info);
     });
   },
+  setTitlebarDark: function (dark) {
+    return ipcRenderer.invoke("set-titlebar-dark", dark);
+  },
+  toggleMaximize: function () {
+    return ipcRenderer.invoke("toggle-maximize");
+  },
+  onSystemThemeChanged: function (cb) {
+    ipcRenderer.on("system-theme-changed", function (_e, dark) {
+      cb(dark);
+    });
+  },
+  webdavTest: function (cfg) {
+    return ipcRenderer.invoke("webdav-test", cfg);
+  },
+  webdavExport: function (cfg, notes) {
+    return ipcRenderer.invoke("webdav-export", cfg, notes);
+  },
 });
