@@ -1,0 +1,73 @@
+{
+  "name": "easynote",
+  "version": "1.1.3",
+  "description": "高度还原 Simplenote 的纯中文笔记软件（支持云同步账号与 Windows/macOS/Linux 三端）",
+  "main": "main.js",
+  "author": "WorkBuddy",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist:win": "electron-builder --win --x64 --publish always",
+    "dist:mac": "electron-builder --mac --universal --publish always",
+    "dist:mac:local": "electron-builder --mac --universal --publish never",
+    "dist:linux": "electron-builder --linux --x64 --publish always",
+    "dist:all": "electron-builder --win --mac --linux --publish always"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.workbuddy.simplenotezh",
+    "productName": "简易笔记",
+    "copyright": "Copyright © 2026 WorkBuddy",
+    "icon": "build/icon.png",
+    "files": [
+      "index.html",
+      "styles.css",
+      "app.js",
+      "main.js",
+      "preload.js",
+      "build/icon.png"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "easynote-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity",
+      "gatekeeperAssess": false,
+      "hardenedRuntime": false,
+      "artifactName": "easynote-${version}.${ext}",
+      "extendInfo": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "feibixunchang",
+        "repo": "easynote"
+      }
+    ],
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"], "artifactName": "easynote-${version}-x86_64.${ext}" },
+        { "target": "deb", "arch": ["x64"], "artifactName": "easynote_${version}_amd64.${ext}" }
+      ],
+      "category": "Utility",
+      "maintainer": "WorkBuddy"
+    }
+  }
+}

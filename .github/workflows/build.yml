@@ -1,0 +1,57 @@
+name: 简易笔记 · 三端打包
+
+# 在云端分别用 Windows / macOS / Linux runner 打包，产出三个平台的安装包。
+# 用法：push 一个以 v 开头的 tag（如 v1.1.0）即可自动构建并上传产物（Artifacts）。
+# 产物在 GitHub 仓库的 Actions → 对应运行 → Artifacts 中下载。
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+          - os: macos-latest
+            script: dist:mac
+          - os: ubuntu-latest
+            script: dist:linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 安装依赖
+        run: npm ci
+      - name: 安装 macOS 打包必需的原生模块 dmg-license
+        if: matrix.os == 'macos-latest'
+        run: npm install dmg-license
+      - name: 安装 Linux 系统依赖（打包 deb/rpm 需要）
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg rpm
+      - name: 打包并发布到 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run ${{ matrix.script }}
+      - name: 收集安装包
+        shell: bash
+        run: |
+          mkdir -p release
+          cp dist/*.exe release/ 2>/dev/null || true
+          cp dist/*.dmg release/ 2>/dev/null || true
+          cp dist/*.AppImage release/ 2>/dev/null || true
+          cp dist/*.deb release/ 2>/dev/null || true
+          cp dist/*.rpm release/ 2>/dev/null || true
+          ls -lh release/
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: 简易笔记-${{ matrix.os }}
+          path: release/
