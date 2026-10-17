@@ -10,4 +10,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
       cb();
     });
   },
+  getAppVersion: function () {
+    return ipcRenderer.invoke("get-app-version");
+  },
+  checkUpdate: function () {
+    return ipcRenderer.invoke("check-update");
+  },
+  openExternal: function (url) {
+    return ipcRenderer.invoke("open-external", url);
+  },
+  onUpdateAvailable: function (cb) {
+    ipcRenderer.on("update-available", function (_e, info) {
+      cb(info);
+    });
+  },
 });

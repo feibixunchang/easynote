@@ -995,6 +995,61 @@
         if (b) b.click();
       });
     }
+    initVersionAndUpdate();
+  }
+
+  // ============ 版本号显示与更新提示（仅 Electron 环境） ============
+  function initVersionAndUpdate() {
+    var api = window.electronAPI;
+    if (!api || !api.getAppVersion) return;
+
+    api.getAppVersion().then(function (v) {
+      var el = document.getElementById("appVersion");
+      if (el) el.textContent = "v" + v;
+    });
+
+    var banner = document.getElementById("updateBanner");
+    var text = document.getElementById("updateText");
+    var dl = document.getElementById("updateDownloadBtn");
+    var dismiss = document.getElementById("updateDismissBtn");
+    if (!banner) return;
+
+    var releaseUrl = "";
+    function showUpdate(info) {
+      if (!info || !info.version) return;
+      releaseUrl = info.url || "";
+      if (text) text.textContent = "发现新版本 v" + info.version;
+      banner.hidden = false;
+    }
+
+    api.onUpdateAvailable(showUpdate);
+
+    if (dl) {
+      dl.addEventListener("click", function () {
+        if (releaseUrl && api.openExternal) api.openExternal(releaseUrl);
+      });
+    }
+    if (dismiss) {
+      dismiss.addEventListener("click", function () {
+        banner.hidden = true;
+      });
+    }
+
+    // 点击版本徽标 → 手动检查更新
+    var badge = document.getElementById("appVersion");
+    if (badge && api.checkUpdate) {
+      badge.style.cursor = "pointer";
+      badge.title = "点击检查更新";
+      badge.addEventListener("click", function () {
+        badge.textContent = "检查中…";
+        api.checkUpdate().then(function () {
+          // 更新横幅由 update-available 事件驱动，这里只恢复版本号显示
+          api.getAppVersion().then(function (v) {
+            badge.textContent = "v" + v;
+          });
+        });
+      });
+    }
   }
 
   init();
