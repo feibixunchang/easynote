@@ -55,6 +55,7 @@
     token: "",
     user: "",
     serverUrl: "http://localhost:3000",
+    lastSyncTs: 0,
   };
 
   /* ---------------- 存储 ---------------- */
@@ -310,6 +311,10 @@
       item.appendChild(snip);
       item.appendChild(meta);
       item.addEventListener("click", function () { selectNote(n.id); });
+      item.addEventListener("contextmenu", function (e) {
+        e.preventDefault();
+        openNoteMenu(e.clientX, e.clientY, n);
+      });
       el.noteList.appendChild(item);
     });
   }
@@ -327,7 +332,8 @@
         '<button data-action="preview" class="' + (state.preview ? "active" : "") + '" title="预览" ' + (note.markdown ? "" : "disabled") + ">👁</button>" +
         '<button data-action="info" title="笔记信息">ⓘ</button>' +
         '<button data-action="share" title="复制内容到剪贴板">↗</button>' +
-        '<button data-action="trash" title="移到回收站">🗑</button>';
+        '<button data-action="trash" title="移到回收站">🗑</button>' +
+        '<button data-action="more" title="更多操作">⋯</button>';
     }
     var btns = el.toolbar.querySelectorAll("button");
     for (var i = 0; i < btns.length; i++) {
@@ -418,6 +424,12 @@
         showInfo(note); break;
       case "share":
         copyText(note.content); toast("已复制笔记内容到剪贴板"); break;
+      case "more": {
+        var mbtn = el.toolbar.querySelector('[data-action="more"]');
+        var r = mbtn ? mbtn.getBoundingClientRect() : { left: 200, bottom: 80 };
+        openNoteMenu(r.left, r.bottom + 4, note);
+        break;
+      }
       case "trash":
         note.deleted = true; note.deletedDate = Date.now(); note.pinned = false;
         state.currentId = null; save(); render(); break;
@@ -434,9 +446,13 @@
     var content = note.content || "";
     var words = content.trim() ? (content.trim().match(/[\u4e00-\u9fa5]|[A-Za-z0-9]+/g) || []).length : 0;
     var tags = extractTags(note.content);
+    var lastSync = state.lastSyncTs
+      ? new Date(state.lastSyncTs).toLocaleString("zh-CN")
+      : (state.token ? "尚未同步" : "未登录云同步");
     el.infoBody.innerHTML =
       "<p><b>创建时间：</b>" + new Date(note.createdDate).toLocaleString("zh-CN") + "</p>" +
       "<p><b>修改时间：</b>" + new Date(note.modifiedDate).toLocaleString("zh-CN") + "</p>" +
+      "<p><b>最后同步：</b>" + lastSync + "</p>" +
       "<p><b>字符数：</b>" + content.length + "　<b>词数：</b>" + words + "</p>" +
       "<p><b>标签：</b>" + (tags.length ? tags.map(function (t) { return "#" + t; }).join(" ") : "无") + "</p>" +
       "<p><b>Markdown：</b>" + (note.markdown ? "已开启" : "未开启") + "　<b>置顶：</b>" + (note.pinned ? "是" : "否") + "</p>";
@@ -566,6 +582,25 @@
     el.infoModal.addEventListener("click", function (e) {
       if (e.target === el.infoModal) el.infoModal.hidden = true;
     });
+
+    // 编辑器右键菜单（全中文）
+    el.editor.addEventListener("contextmenu", function (e) {
+      e.preventDefault();
+      showCtxMenu(e.clientX, e.clientY, [
+        { label: "撤销", shortcut: "Ctrl+Z", action: function () { el.editor.focus(); document.execCommand("undo"); } },
+        { label: "重做", shortcut: "Ctrl+Y", action: function () { el.editor.focus(); document.execCommand("redo"); } },
+        { sep: true },
+        { label: "插入清单", action: function () { insertChecklist(); } },
+        { sep: true },
+        { label: "剪切", shortcut: "Ctrl+X", action: function () { document.execCommand("cut"); } },
+        { label: "复制", shortcut: "Ctrl+C", action: function () { document.execCommand("copy"); } },
+        { label: "粘贴", shortcut: "Ctrl+V", action: function () { document.execCommand("paste"); } },
+        { label: "全选", shortcut: "Ctrl+A", action: function () { el.editor.focus(); el.editor.select(); } },
+      ]);
+    });
+
+    // 点击空白处关闭右键菜单
+    document.addEventListener("click", hideCtxMenu);
 
     el.settingsClose.addEventListener("click", function () { el.settingsModal.hidden = true; });
     el.settingsModal.addEventListener("click", function (e) {
@@ -769,6 +804,7 @@
           saveLocalOnly();
           render();
         }
+        state.lastSyncTs = Date.now();
         setSyncStatus("已同步 · " + new Date().toLocaleTimeString("zh-CN"));
         return res;
       })
@@ -782,6 +818,96 @@
     });
   }
 
+  /* ---------------- 右键菜单 ---------------- */
+  var ctxEl = null;
+  function ensureCtxMenu() {
+    if (!ctxEl) {
+      ctxEl = document.createElement("div");
+      ctxEl.className = "ctx-menu";
+      ctxEl.hidden = true;
+      document.body.appendChild(ctxEl);
+    }
+    return ctxEl;
+  }
+  function showCtxMenu(x, y, items) {
+    var m = ensureCtxMenu();
+    m.innerHTML = "";
+    items.forEach(function (it) {
+      if (it.sep) {
+        var s = document.createElement("div");
+        s.className = "ctx-sep";
+        m.appendChild(s);
+        return;
+      }
+      var row = document.createElement("div");
+      row.className = "ctx-item" + (it.danger ? " danger" : "");
+      var lbl = document.createElement("span");
+      lbl.textContent = it.label;
+      row.appendChild(lbl);
+      if (it.shortcut) {
+        var sc = document.createElement("span");
+        sc.className = "shortcut";
+        sc.textContent = it.shortcut;
+        row.appendChild(sc);
+      }
+      row.addEventListener("click", function () {
+        hideCtxMenu();
+        if (it.action) it.action();
+      });
+      m.appendChild(row);
+    });
+    m.hidden = false;
+    var w = m.offsetWidth, h = m.offsetHeight;
+    if (x + w > window.innerWidth) x = window.innerWidth - w - 6;
+    if (y + h > window.innerHeight) y = window.innerHeight - h - 6;
+    if (x < 6) x = 6;
+    if (y < 6) y = 6;
+    m.style.left = x + "px";
+    m.style.top = y + "px";
+  }
+  function hideCtxMenu() {
+    if (ctxEl) ctxEl.hidden = true;
+  }
+
+  function openNoteMenu(x, y, note) {
+    var items = [
+      { label: note.pinned ? "取消置顶" : "置顶", action: function () { handleAction("pin", note); } },
+      { label: note.markdown ? "关闭 Markdown" : "开启 Markdown", action: function () { handleAction("markdown", note); } },
+      { sep: true },
+      { label: "复制内部链接", action: function () { copyInternalLink(note); } },
+      { label: "复制内容到剪贴板", action: function () { handleAction("share", note); } },
+      { sep: true },
+      { label: "历史记录", action: function () { toast("历史记录功能即将开放"); } },
+      { label: "发布到网络", action: function () { toast("发布功能即将开放"); } },
+      { sep: true },
+      { label: "移动到回收站", danger: true, action: function () { handleAction("trash", note); } },
+    ];
+    showCtxMenu(x, y, items);
+  }
+
+  function copyInternalLink(note) {
+    var link = "easynote://note/" + note.id;
+    copyText(link);
+    toast("已复制内部链接：" + link);
+  }
+
+  function insertChecklist() {
+    var ta = el.editor;
+    var note = state.notes.filter(function (n) { return n.id === state.currentId; })[0];
+    if (!note || note.deleted) return;
+    var start = ta.selectionStart, end = ta.selectionEnd;
+    var text = ta.value;
+    var before = text.slice(0, start);
+    var sel = text.slice(start, end);
+    var prefix = (before === "" || /[\n]$/.test(before)) ? "- [ ] " : "\n- [ ] ";
+    var insert = prefix + sel;
+    ta.value = text.slice(0, start) + insert + text.slice(end);
+    var pos = start + insert.length;
+    ta.selectionStart = ta.selectionEnd = pos;
+    ta.focus();
+    ta.dispatchEvent(new Event("input"));
+  }
+
   /* ---------------- 初始化 ---------------- */
   function seedIfEmpty() {
     if (state.notes.length === 0) {
@@ -789,7 +915,7 @@
       state.notes.push({
         id: uid(),
         content:
-          "欢迎使用简易笔记\n\n这是一个高度还原 Simplenote 的纯中文笔记软件，数据只保存在本机浏览器中。\n\n# 功能一览\n- 三栏布局：标签 / 列表 / 编辑器\n- 搜索、标签（用 #标签 语法）、置顶\n- Markdown 编辑与实时预览\n- 回收站、深色模式、导入导出\n\n**加粗**、*斜体*、`行内代码` 都支持。\n点击顶部工具栏的 M↓ 开启 Markdown，再点 👁 预览。",
+          "欢迎使用简易笔记\n\n这是一个高度还原 Simplenote 的纯中文笔记软件，支持账号云同步与多端使用。\n\n# 功能一览\n- 三栏布局：标签 / 列表 / 编辑器\n- 搜索、标签（用 #标签 语法）、置顶\n- Markdown 编辑与实时预览\n- 回收站、深色模式、导入导出\n- 在编辑器或笔记上点右键，有中文快捷菜单\n- 工具栏「⋯」可置顶、复制内部链接、移动到回收站\n\n**加粗**、*斜体*、`行内代码` 都支持。\n点击顶部工具栏的 M↓ 开启 Markdown，再点 👁 预览。",
         pinned: true,
         markdown: true,
         deleted: false,

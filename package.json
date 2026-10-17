@@ -1,6 +1,6 @@
 {
   "name": "simplenote-zh",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "高度还原 Simplenote 的纯中文笔记软件（支持云同步账号与 Windows/macOS/Linux 三端）",
   "main": "main.js",
   "author": "WorkBuddy",
@@ -51,7 +51,7 @@
       {
         "provider": "github",
         "owner": "feibixunchang",
-        "repo": "simplenote-zh"
+        "repo": "easynote"
       }
     ],
     "linux": {
