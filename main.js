@@ -1,6 +1,7 @@
 /* ============ Electron 主进程 ============ */
 const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme } = require("electron");
 const path = require("path");
+const fs = require("fs");
 const { execSync, execFile } = require("child_process");
 
 const APP_VERSION = app.getVersion();
@@ -132,17 +133,44 @@ let tray = null;
 let mainWindow = null;
 
 function getTrayIcon() {
-  // 256 尺寸由 Electron 自动缩放到各平台托盘大小
+  // 纯白笔记本样式托盘图标：macOS 用「模板图」机制，菜单栏里自动显示为单色
+  // （深色菜单栏→白色，浅色→深色），与其它系统托盘图标一致、美观。
+  // 图标本身是白色形状 + 透明底；模板图只取 alpha 通道，颜色被忽略。
+  const trayPath = path.join(__dirname, "build/icons/tray-mac.png");
+  try {
+    const buf = fs.readFileSync(trayPath); // fs 透明支持 asar
+    let img = nativeImage.createFromBuffer(buf);
+    if (img && !img.isEmpty()) {
+      img.setTemplateImage(true); // 关键：模板图 → 菜单栏里显示为标准单色图标
+      const s = img.getSize();
+      // 菜单栏图标应约为 18pt 高；过大就缩放，避免在菜单栏里拉成一条长横条
+      if (s.height > 20) img = img.resize({ height: 18, quality: "best" });
+      return img;
+    }
+  } catch (e) {
+    /* 回退到通用图标 */
+  }
+  // 回退：复用原 app 图标（同样作为模板图），避免菜单栏出现空白长条
   const candidates = [
     path.join(__dirname, "build/icons/256x256.png"),
     path.join(__dirname, "build/icons/128x128.png"),
     path.join(__dirname, "build/icon.png"),
   ];
   for (const p of candidates) {
-    const img = nativeImage.createFromPath(p);
-    if (!img.isEmpty()) return img;
+    try {
+      const buf = fs.readFileSync(p); // fs 透明支持 asar
+      let img = nativeImage.createFromBuffer(buf);
+      if (img && !img.isEmpty()) {
+        img.setTemplateImage(true);
+        const s = img.getSize();
+        if (s.height > 20) img = img.resize({ height: 18, quality: "best" });
+        return img;
+      }
+    } catch (e) {
+      /* 尝试下一个候选 */
+    }
   }
-  return nativeImage.createFromPath(path.join(__dirname, "build/icons/48x48.png"));
+  return nativeImage.createEmpty();
 }
 
 function buildTrayMenu() {
@@ -192,6 +220,7 @@ function refreshTrayMenu() {
 
 function createTray() {
   tray = new Tray(getTrayIcon());
+  if (process.platform === "darwin") tray.setTitle(""); // 菜单栏只显示图标、不显示文字标题
   tray.setToolTip("简易笔记 v" + APP_VERSION);
   tray.setContextMenu(buildTrayMenu());
   tray.on("click", toggleWindow);
@@ -389,7 +418,7 @@ async function davPut(url, cfg, content, type) {
 }
 function safeFileName(name) {
   return String(name || "")
-    .replace(/[\\/:*?"<>| -]/g, "_")
+    .replace(/[\\/:*?"<>| -]/g, "_")
     .slice(0, 60) || "note";
 }
 ipcMain.handle("webdav-test", function (_e, cfg) {

@@ -4,6 +4,7 @@ server/node_modules/
 dist/
 server/data/
 release/
+ebin/
 *.log
 .DS_Store
 Thumbs.db
