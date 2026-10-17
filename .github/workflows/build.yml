@@ -28,6 +28,9 @@ jobs:
           node-version: 20
       - name: 安装依赖
         run: npm ci
+      - name: 安装 macOS 打包必需的原生模块 dmg-license
+        if: matrix.os == 'macos-latest'
+        run: npm install dmg-license
       - name: 安装 Linux 系统依赖（打包 deb/rpm 需要）
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg rpm
