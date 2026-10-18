@@ -2,6 +2,8 @@
 node_modules/
 
 # Capacitor 生成物（原生工程目录纳入版本管理，构建产物忽略）
+# 注意：res/values/strings.xml 不忽略——cap sync 只在文件已存在时更新它、
+# 不会创建，CI 全新检出缺了它 AAPT 会报 resource string/app_name not found。
 android/build/
 android/app/build/
 android/.gradle/
@@ -12,7 +14,6 @@ android/app/src/main/assets/public/
 android/app/src/main/assets/capacitor.config.json
 android/app/src/main/assets/capacitor.plugins.json
 android/app/src/main/res/xml/config.xml
-android/app/src/main/res/values/strings.xml
 
 # iOS：原生工程纳入版本管理；构建产物与 cap sync 生成物由 ios/.gitignore 处理
 ios/App/build/
