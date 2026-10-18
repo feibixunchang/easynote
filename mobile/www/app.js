@@ -23,7 +23,7 @@
   var TOTAL_KEY = "simplenote_zh_total";
   var DAV_KEY = "simplenote_zh_webdav";
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.4";
+  var APP_VERSION = "1.0.5";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -234,17 +234,12 @@
     var sb = plugin("StatusBar");
     if (sb && sb.setStyle) {
       try {
-        // 关键一：先关再开 overlay。
-        // 原生插件在 setOverlaysWebView 里有一条 `if (overlay == isOverlayingWebview) return;`
-        // 的短路——若本来就处于 overlay 状态，单次调用会被直接跳过，WebView 的 frame
-        // 也不会被重算，结果就是页面停在状态栏下方、那一行露出原生窗口底色（灰的）。
-        // 先切 false 再切 true，能强制走一遍 resizeWebView()，把 WebView 真正铺到屏幕顶端。
-        if (sb.setOverlaysWebView) {
-          sb.setOverlaysWebView({ overlay: false });
-          sb.setOverlaysWebView({ overlay: true });
-        }
+        // 注意：这里**不要**调 setOverlaysWebView。
+        // 插件内部 `if (overlay == isOverlayingWebview) return` 会短路，
+        // 而"先关再开"虽然能触发 resizeWebView()，但那段代码依赖 keyWindow 的 bounds，
+        // 在启动早期取值不可靠，会把 WebView 的 frame 算小 → 界面被挤到左边、右侧留白。
+        // 状态栏底色改由原生侧（SceneDelegate）兜底。
         sb.setStyle({ style: dark ? "DARK" : "LIGHT" });
-        // 兜底：万一 overlay 仍被系统干涉，让原生底色也跟随主题
         sb.setBackgroundColor({ color: dark ? "#101216" : "#ffffff" });
       } catch (e) {}
     }
