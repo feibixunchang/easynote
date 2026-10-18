@@ -45,9 +45,26 @@ jobs:
         run: npx cap sync android
 
       - name: 确保 Android SDK 36 平台可用
+        shell: bash
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          set -uo pipefail
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          if [ -d "$SDK/platforms/android-36" ]; then
+            echo "Android SDK 36 平台已存在，跳过安装"
+          else
+            # GitHub Runner 不把 sdkmanager 放进 PATH，用完整路径（带兜底查找）
+            SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+            if [ ! -x "$SM" ]; then
+              SM="$(find "$SDK/cmdline-tools" -maxdepth 5 -name sdkmanager -type f 2>/dev/null | head -1)"
+            fi
+            if [ -n "$SM" ] && [ -x "$SM" ]; then
+              yes | "$SM" --licenses > /dev/null 2>&1 || true
+              "$SM" "platforms;android-36" "build-tools;36.0.0"
+            else
+              echo "::error::缺少 platforms/android-36，且在 $SDK 下找不到 sdkmanager"
+              exit 1
+            fi
+          fi
 
       - name: 构建 Debug APK
         working-directory: mobile/android
