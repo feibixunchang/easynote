@@ -484,6 +484,30 @@ body.dark .sync-pill.ok { color: #4ade80; }
 .toolbar button.active { background: var(--accent); color: var(--accent-text); }
 .toolbar button:disabled { opacity: 0.45; }
 
+/* 回收站动作条：恢复 / 永久删除 用带文字的按钮，跟列表里的「长按才出菜单」解耦 */
+.toolbar.is-trash {
+  gap: 8px;
+  padding-bottom: 10px;
+}
+.toolbar.is-trash button.text-action {
+  min-width: 0;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  gap: 4px;
+}
+.toolbar.is-trash button.text-action.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.toolbar.is-trash button.text-action.danger {
+  background: rgba(217, 72, 72, 0.12);
+  color: #d94848;
+}
+.toolbar.is-trash button.text-action.primary:active { filter: brightness(0.92); }
+.toolbar.is-trash button.text-action.danger:active { background: rgba(217, 72, 72, 0.22); }
+
 #editor {
   flex: 1;
   min-height: 0;

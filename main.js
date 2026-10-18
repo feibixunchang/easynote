@@ -2,7 +2,7 @@
 const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme, clipboard, protocol } = require("electron");
 const path = require("path");
 const fs = require("fs");
-const { execSync, execFile } = require("child_process");
+const { execFile } = require("child_process");
 
 const APP_VERSION = app.getVersion();
 const REPO_OWNER = "feibixunchang";
@@ -15,66 +15,224 @@ const THEME_COLORS = {
   dark: { bg: "#1e1e1e", fg: "#e2e2e2" },
 };
 
-// 枚举本机已安装字体（按平台分别实现）
-function getSystemFonts() {
+/* ============ 系统字体枚举（异步 + 双层缓存，绝不阻塞主进程） ============ */
+// 历史坑：以前用 execSync 跑 `system_profiler SPFontsDataType -json`，
+// 在 M 系列 Mac 上实测要 40 秒（15s 超时后抛异常，静默回退到兜底列表），
+// 结果就是点一下「设置」主进程整整冻住 15 秒，用户看到的指针一直在转。
+// 现在的做法：
+//   1) macOS 改用 osascript + JXA 调 NSFontManager，0.4 秒拿到 400+ 字体族；
+//   2) 全部 execFile 异步，主进程永不阻塞；
+//   3) 内存 + userData/system-fonts.json 双层缓存，第二次起瞬开；
+//   4) 启动后空闲预热，用户点设置时基本已命中缓存；
+//   5) 并发请求合并成一次子进程调用。
+let fontCache = null;
+let fontPending = null;
+
+// JXA：NSFontManager.availableFontFamilies → JSON 数组
+const JXA_LIST_FONTS =
+  'ObjC.import("AppKit");' +
+  'var a = $.NSFontManager.sharedFontManager.availableFontFamilies;' +
+  'var out = [];' +
+  'for (var i = 0; i < a.count; i++) { out.push(ObjC.unwrap(a.objectAtIndex(i))); }' +
+  'JSON.stringify(out);';
+
+function runCommand(file, args, opts) {
+  return new Promise(function (resolve, reject) {
+    execFile(
+      file,
+      args,
+      Object.assign(
+        {
+          encoding: "utf8",
+          maxBuffer: 32 * 1024 * 1024,
+          windowsHide: true,
+          timeout: 15000,
+        },
+        opts || {}
+      ),
+      function (err, stdout) {
+        if (err) reject(err);
+        else resolve(String(stdout || ""));
+      }
+    );
+  });
+}
+
+function uniqSorted(names) {
+  const set = new Set();
+  (names || []).forEach(function (n) {
+    const s = String(n == null ? "" : n).trim();
+    // 以「.」开头的是 macOS 内部私有字体（.PingFang SC / .Hiragino ... Interface），
+    // 用户在字体下拉里根本用不上，直接过滤，免得列表里一堆看不懂的名字。
+    if (s && s.charAt(0) !== ".") set.add(s);
+  });
+  return [...set].sort(function (a, b) {
+    try {
+      return a.localeCompare(b, "zh-Hans-CN");
+    } catch (e) {
+      return a < b ? -1 : a > b ? 1 : 0;
+    }
+  });
+}
+
+function parseFcList(out) {
+  const names = [];
+  String(out || "").split("\n").forEach(function (line) {
+    // fc-list 一行可能含多个字体族（逗号分隔）
+    line.split(",").forEach(function (f) {
+      names.push(f);
+    });
+  });
+  return uniqSorted(names);
+}
+
+async function getMacFonts() {
+  // 首选：JXA + NSFontManager（实测 0.4s / 426 个字体族）
   try {
-    if (process.platform === "win32") return getWindowsFonts();
-    if (process.platform === "darwin") return getMacFonts();
-    return getLinuxFonts();
+    const out = await runCommand(
+      "/usr/bin/osascript",
+      ["-l", "JavaScript", "-e", JXA_LIST_FONTS],
+      { timeout: 12000 }
+    );
+    const list = JSON.parse(out);
+    if (Array.isArray(list) && list.length) return uniqSorted(list);
+  } catch (e) {}
+  // 兜底 1：装了 fontconfig 的机器（brew install fontconfig）
+  try {
+    const out = await runCommand("fc-list", [":", "family"], { timeout: 12000 });
+    const list = parseFcList(out);
+    if (list.length) return list;
+  } catch (e) {}
+  // 兜底 2：扫描字体目录里的文件名（不解析字体表，仅取文件名，聊胜于无）
+  try {
+    const dirs = [
+      "/System/Library/Fonts",
+      "/System/Library/Fonts/Supplemental",
+      "/Library/Fonts",
+      path.join(app.getPath("home"), "Library/Fonts"),
+    ];
+    const names = [];
+    dirs.forEach(function (dir) {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir);
+      } catch (e) {
+        return;
+      }
+      entries.forEach(function (f) {
+        const m = f.match(/^(.+?)\.(ttf|otf|ttc|dfont)$/i);
+        if (m) names.push(m[1].replace(/[-_]+/g, " "));
+      });
+    });
+    return uniqSorted(names);
   } catch (e) {
     return [];
   }
 }
-function getWindowsFonts() {
-  const out = execSync(
-    'reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts" /s',
-    { encoding: "utf8", windowsHide: true }
-  );
-  const names = new Set();
+
+async function getWindowsFonts() {
+  const out = await runCommand("reg", [
+    "query",
+    "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts",
+    "/s",
+  ]);
+  const names = [];
   out.split("\n").forEach(function (line) {
     const m = line.match(/(.+?)\s+REG_SZ\s+\S/);
     if (m) {
-      let name = m[1]
-        .replace(/\s*\((TrueType|OpenType|OpenType CFF|Type 1)\)\s*$/i, "")
-        .trim();
-      if (name) names.add(name);
+      names.push(
+        m[1].replace(/\s*\((TrueType|OpenType|OpenType CFF|Type 1)\)\s*$/i, "")
+      );
     }
   });
-  return [...names].sort();
-}
-function getMacFonts() {
-  // macOS：system_profiler 输出所有字体族（可能耗时几秒）
-  const out = execSync("system_profiler SPFontsDataType -json", {
-    encoding: "utf8",
-    timeout: 15000,
-    maxBuffer: 32 * 1024 * 1024,
-  });
-  const data = JSON.parse(out);
-  const names = new Set();
-  (data.SPFontsDataType || []).forEach(function (entry) {
-    if (entry.family) names.add(String(entry.family).trim());
-    (entry.typefaces || []).forEach(function (t) {
-      if (t.family) names.add(String(t.family).trim());
-    });
-  });
-  return [...names].filter(Boolean).sort();
-}
-function getLinuxFonts() {
-  // Linux：fontconfig 列出字体族名（fc-list 属于 fontconfig 包，桌面环境必装）
-  const out = execSync("fc-list : family", { encoding: "utf8", timeout: 15000 });
-  const names = new Set();
-  out.split("\n").forEach(function (line) {
-    // 一行可能含多个字体族（逗号分隔）
-    line.split(",").forEach(function (f) {
-      f = f.trim();
-      if (f) names.add(f);
-    });
-  });
-  return [...names].sort();
+  return uniqSorted(names);
 }
 
-ipcMain.handle("get-system-fonts", function () {
-  return getSystemFonts();
+async function getLinuxFonts() {
+  // Linux：fontconfig 列出字体族名（fc-list 属于 fontconfig 包，桌面环境必装）
+  const out = await runCommand("fc-list", [":", "family"]);
+  return parseFcList(out);
+}
+
+function fontsCacheFile() {
+  try {
+    return path.join(app.getPath("userData"), "system-fonts.json");
+  } catch (e) {
+    return null;
+  }
+}
+
+function readFontsCache() {
+  const file = fontsCacheFile();
+  if (!file) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (raw && Array.isArray(raw.fonts) && raw.fonts.length) return raw.fonts;
+  } catch (e) {}
+  return null;
+}
+
+function writeFontsCache(list) {
+  const file = fontsCacheFile();
+  if (!file || !list || !list.length) return;
+  try {
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ fonts: list, savedAt: Date.now() }),
+      "utf8"
+    );
+  } catch (e) {}
+}
+
+function collectFonts() {
+  if (fontPending) return fontPending;
+  const job =
+    process.platform === "win32"
+      ? getWindowsFonts()
+      : process.platform === "darwin"
+      ? getMacFonts()
+      : getLinuxFonts();
+  fontPending = job.then(
+    function (list) {
+      fontPending = null;
+      if (list && list.length) {
+        fontCache = list;
+        writeFontsCache(list);
+        return list;
+      }
+      return fontCache || readFontsCache() || [];
+    },
+    function () {
+      // 枚举失败（超时 / 权限 / 系统限制）退回缓存，永不抛给渲染进程
+      fontPending = null;
+      return fontCache || readFontsCache() || [];
+    }
+  );
+  return fontPending;
+}
+
+// force=true 强制重新枚举（给「刷新字体列表」用），否则优先走缓存
+function getSystemFonts(force) {
+  if (!force && fontCache) return Promise.resolve(fontCache);
+  if (fontPending) return fontPending;
+  if (!force) {
+    const cached = readFontsCache();
+    if (cached) {
+      fontCache = cached;
+      // 落盘缓存命中：立刻返回，同时在后台静默刷新一次，
+      // 这样用户新装的字体下次打开设置就能看到，且完全不与 UI 抢时间。
+      const t = setTimeout(function () {
+        collectFonts();
+      }, 2500);
+      if (t && typeof t.unref === "function") t.unref();
+      return Promise.resolve(cached);
+    }
+  }
+  return collectFonts();
+}
+
+ipcMain.handle("get-system-fonts", function (_event, force) {
+  return getSystemFonts(force === true);
 });
 
 /* ============ 标题栏与主界面一体色 ============ */
@@ -779,6 +937,11 @@ if (!app.requestSingleInstanceLock()) {
     // 启动 5 秒后静默检查一次更新；之后由 scheduleUpdateCheck 自动续期
     // （成功 → 6 小时；失败 → 10 分钟重试）
     scheduleUpdateCheck(5000);
+    // 启动 4 秒后空闲预热字体缓存：用户点「设置」时直接命中，不再等枚举
+    const fontWarm = setTimeout(() => {
+      getSystemFonts().catch(() => {});
+    }, 4000);
+    if (fontWarm && typeof fontWarm.unref === "function") fontWarm.unref();
     // 系统深浅色变化时推送给渲染进程（跟随系统模式）
     nativeTheme.on("updated", () => {
       [mainWindow, ...BrowserWindow.getAllWindows()].forEach(function (w) {

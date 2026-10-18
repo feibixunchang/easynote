@@ -23,7 +23,7 @@
   var TOTAL_KEY = "simplenote_zh_total";
   var DAV_KEY = "simplenote_zh_webdav";
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.6";
+  var APP_VERSION = "1.0.7";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -634,17 +634,28 @@
   }
 
   function setToolbar(note) {
-    el.editorToolbar.innerHTML =
-      '<button data-action="pin" class="' + (note.pinned ? "active" : "") + '" title="置顶 / 取消置顶">📌</button>' +
-      '<button data-action="color" class="' + (note.color ? "active" : "") + '" title="设置颜色标签">●</button>' +
-      '<button data-action="markdown" class="' + (note.markdown ? "active" : "") + '" title="开启 / 关闭 Markdown">M↓</button>' +
-      '<button data-action="preview" class="' + (state.preview ? "active" : "") + '" title="预览" ' + (note.markdown ? "" : "disabled") + ">👁</button>" +
-      '<button data-action="insertText" title="插入文本（引用/代码/分隔线/日期）">文</button>' +
-      '<button data-action="insertImage" title="插入图片（拍照 / 相册）">🖼</button>' +
-      '<button data-action="insertLink" title="插入链接">🔗</button>' +
-      '<button data-action="info" title="笔记信息">ⓘ</button>' +
-      '<button data-action="share" title="分享 / 复制">↗</button>' +
-      '<button data-action="trash" title="移到回收站">🗑</button>';
+    if (note && note.deleted) {
+      // 回收站里的笔记：只保留真正可用的操作，并做成带文字的显式按钮
+      // （以前回收站复用了编辑态工具条，没有「恢复」，只能长按列表项弹面板）
+      el.editorToolbar.classList.add("is-trash");
+      el.editorToolbar.innerHTML =
+        '<button data-action="restore" class="text-action primary" title="恢复到笔记">♻ 恢复</button>' +
+        '<button data-action="purge" class="text-action danger" title="永久删除">🗑 永久删除</button>' +
+        '<button data-action="info" title="笔记信息">ⓘ</button>';
+    } else {
+      el.editorToolbar.classList.remove("is-trash");
+      el.editorToolbar.innerHTML =
+        '<button data-action="pin" class="' + (note.pinned ? "active" : "") + '" title="置顶 / 取消置顶">📌</button>' +
+        '<button data-action="color" class="' + (note.color ? "active" : "") + '" title="设置颜色标签">●</button>' +
+        '<button data-action="markdown" class="' + (note.markdown ? "active" : "") + '" title="开启 / 关闭 Markdown">M↓</button>' +
+        '<button data-action="preview" class="' + (state.preview ? "active" : "") + '" title="预览" ' + (note.markdown ? "" : "disabled") + ">👁</button>" +
+        '<button data-action="insertText" title="插入文本（引用/代码/分隔线/日期）">文</button>' +
+        '<button data-action="insertImage" title="插入图片（拍照 / 相册）">🖼</button>' +
+        '<button data-action="insertLink" title="插入链接">🔗</button>' +
+        '<button data-action="info" title="笔记信息">ⓘ</button>' +
+        '<button data-action="share" title="分享 / 复制">↗</button>' +
+        '<button data-action="trash" title="移到回收站">🗑</button>';
+    }
     var btns = el.editorToolbar.querySelectorAll("button");
     for (var i = 0; i < btns.length; i++) {
       btns[i].addEventListener("click", function (e) {
@@ -674,12 +685,17 @@
     setToolbar(note);
 
     if (state.preview && note.markdown && !note.deleted) {
-      el.editor.hidden = true;
+      // 「开着预览就没法加文字」：以前这里把编辑器整个隐藏了。
+      // 改成上下分栏——上面渲染结果（能看图），下面仍是输入框，可继续打字。
       el.previewPane.hidden = false;
+      el.previewPane.classList.add("split");
       el.previewPane.innerHTML = renderMarkdown(note.content);
+      el.editor.hidden = false;
+      if (document.activeElement !== el.editor) el.editor.value = note.content;
     } else {
       el.editor.hidden = false;
       el.previewPane.hidden = true;
+      el.previewPane.classList.remove("split");
       if (document.activeElement !== el.editor) el.editor.value = note.content;
     }
   }
@@ -1962,9 +1978,10 @@
     }
 
     // 编辑器输入：自动保存 + 防抖刷新列表 + 标题/保存提示
-    var debounce;
-    var saveFlagTimer;
-    el.editor.addEventListener("input", function () {
+      var debounce;
+      var previewDebounce;
+      var saveFlagTimer;
+      el.editor.addEventListener("input", function () {
       var note = currentNote();
       if (!note || note.deleted) return;
       note.content = el.editor.value;
@@ -1974,6 +1991,11 @@
       scheduleEditorSave();
       clearTimeout(debounce);
       debounce = setTimeout(function () { renderList(); renderTags(); }, 250);
+      // 开着预览时同步刷新渲染结果（图片笔记体积大，用更长的防抖）
+      clearTimeout(previewDebounce);
+      previewDebounce = setTimeout(function () {
+        if (!el.previewPane.hidden) el.previewPane.innerHTML = renderMarkdown(el.editor.value);
+      }, 700);
     });
 
     // 预览区点击链接 → 系统浏览器

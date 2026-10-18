@@ -456,6 +456,39 @@ button.primary:hover { filter: brightness(1.05); }
   font-size: 13px;
 }
 
+/* 确认弹窗：取消（次要）/ 确认（危险） */
+.modal-actions button.ghost {
+  background: transparent;
+  color: var(--text-light);
+  border: 1px solid var(--border-strong);
+  margin-right: 8px;
+}
+.modal-actions button.ghost:hover { background: var(--hover); }
+.modal-actions button.danger { background: #d94848; }
+.modal-actions button.danger:hover { filter: brightness(1.06); }
+
+/* 预览开启时上下分栏：上面渲染结果、下面继续编辑（以前是二选一，开着预览就没法打字） */
+.preview-pane.split {
+  flex: 0 0 42%;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  overflow-y: auto;
+}
+
+/* 回收站工具栏：恢复 / 永久删除 统一尺寸，视觉上成一条整齐横排 */
+.editor-toolbar button[data-action="restore"],
+.editor-toolbar button[data-action="purge"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 108px;
+  min-height: 32px;
+  padding: 6px 12px;
+  white-space: nowrap;
+  line-height: 1;
+}
+
 .setting-row {
   display: flex;
   align-items: center;

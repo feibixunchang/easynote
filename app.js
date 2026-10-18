@@ -545,12 +545,17 @@
     setToolbar(note);
 
     if (state.preview && note.markdown && !note.deleted) {
-      el.editor.hidden = true;
+      // 「开着预览就没法加文字」：以前这里会把编辑器整个隐藏。
+      // 改成上下分栏——上面是渲染结果（能看图），下面仍然是输入框，可以继续打字。
       el.previewPane.hidden = false;
+      el.previewPane.classList.add("split");
       el.previewPane.innerHTML = renderMarkdown(note.content);
+      el.editor.hidden = false;
+      if (document.activeElement !== el.editor) el.editor.value = note.content;
     } else {
       el.editor.hidden = false;
       el.previewPane.hidden = true;
+      el.previewPane.classList.remove("split");
       if (document.activeElement !== el.editor) el.editor.value = note.content;
     }
   }
@@ -593,6 +598,45 @@
     el.editor.focus();
   }
 
+  /* 通用确认弹窗：删除 / 永久删除等破坏性操作前问一句，复用 .modal 样式 */
+  function openConfirm(title, msg, onYes) {
+    var m = document.createElement("div");
+    m.className = "modal";
+    var box = document.createElement("div");
+    box.className = "modal-box";
+    var h = document.createElement("h3");
+    h.textContent = title || "确认";
+    var p = document.createElement("p");
+    p.textContent = msg || "";
+    var actions = document.createElement("div");
+    actions.className = "modal-actions";
+    var cancel = document.createElement("button");
+    cancel.className = "ghost";
+    cancel.textContent = "取消";
+    var yes = document.createElement("button");
+    yes.className = "danger";
+    yes.textContent = "确认";
+    actions.appendChild(cancel);
+    actions.appendChild(yes);
+    box.appendChild(h);
+    box.appendChild(p);
+    box.appendChild(actions);
+    m.appendChild(box);
+    document.body.appendChild(m);
+    function close() { if (m.parentNode) m.parentNode.removeChild(m); }
+    cancel.addEventListener("click", close);
+    m.addEventListener("click", function (e) { if (e.target === m) close(); });
+    yes.addEventListener("click", function () { close(); if (onYes) onYes(); });
+    return close;
+  }
+  // 弹窗里给笔记一个可读的名字（取首行、去掉 Markdown 符号，最长 24 字）
+  function noteCaption(note) {
+    var first = String((note && note.content) || "").split("\n")[0] || "";
+    var t = first.replace(/^[#>\-\*\s]+/, "").trim();
+    if (!t) return "无标题";
+    return t.length > 24 ? t.slice(0, 24) + "…" : t;
+  }
+
   function handleAction(action, note) {
     switch (action) {
       case "pin":
@@ -612,23 +656,33 @@
         break;
       }
       case "trash":
-        note.deleted = true; note.deletedDate = Date.now(); note.pinned = false; note.modifiedDate = Date.now();
-        state.currentId = null; save(); render(); break;
-      case "restore":
-        note.deleted = false; note.deletedDate = null; note.modifiedDate = Date.now(); save(); render(); break;
-      case "purge": {
-        // 记入墓碑再删除：服务端若是合并同步，墓碑可防止笔记被还原
-        if (state.purged.indexOf(note.id) === -1) {
-          state.purged.push(note.id);
-          store.setItem(PURGE_KEY, JSON.stringify(state.purged));
-        }
-        state.notes = state.notes.filter(function (n) { return n.id !== note.id; });
-        if (state.currentId === note.id) state.currentId = null;
-        purgeOnServer([note.id]);
-        save(); render();
-        toast("已永久删除");
+        openConfirm("移到回收站",
+          "「" + noteCaption(note) + "」将被移到回收站，可在回收站里恢复。",
+          function () {
+            note.deleted = true; note.deletedDate = Date.now(); note.pinned = false; note.modifiedDate = Date.now();
+            state.currentId = null; save(); render();
+            toast("已移到回收站");
+          });
         break;
-      }
+      case "restore":
+        note.deleted = false; note.deletedDate = null; note.modifiedDate = Date.now(); save(); render();
+        toast("已恢复"); break;
+      case "purge":
+        openConfirm("永久删除",
+          "「" + noteCaption(note) + "」将被永久删除，不可恢复，并同步删除所有设备上的这一条。",
+          function () {
+            // 记入墓碑再删除：服务端若是合并同步，墓碑可防止笔记被还原
+            if (state.purged.indexOf(note.id) === -1) {
+              state.purged.push(note.id);
+              store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+            }
+            state.notes = state.notes.filter(function (n) { return n.id !== note.id; });
+            if (state.currentId === note.id) state.currentId = null;
+            purgeOnServer([note.id]);
+            save(); render();
+            toast("已永久删除");
+          });
+        break;
       case "color": {
         var cbtn = el.toolbar.querySelector('[data-action="color"]');
         var r = cbtn ? cbtn.getBoundingClientRect() : { left: 200, bottom: 80 };
@@ -794,6 +848,7 @@
     });
 
     var debounce;
+    var previewDebounce;
     el.editor.addEventListener("input", function () {
       var note = state.notes.filter(function (n) { return n.id === state.currentId; })[0];
       if (!note || note.deleted) return;
@@ -803,6 +858,11 @@
       scheduleEditorSave();
       clearTimeout(debounce);
       debounce = setTimeout(function () { renderList(); renderTags(); }, 250);
+      // 开着预览时同步刷新渲染结果（图片笔记体积大，用更长的防抖）
+      clearTimeout(previewDebounce);
+      previewDebounce = setTimeout(function () {
+        if (!el.previewPane.hidden) el.previewPane.innerHTML = renderMarkdown(el.editor.value);
+      }, 700);
     });
     // 失焦 / 关窗前把待落盘的改动写掉，避免最后 600ms 内的输入丢失
     el.editor.addEventListener("blur", flushEditorSave);
@@ -944,7 +1004,7 @@
     document.documentElement.style.setProperty("--editor-fs", (state.fontSize || 16) + "px");
   }
 
-  function fillFontSelect(fonts) {
+  function fillFontSelect(fonts, hint) {
     if (!el.fontSelect) return;
     // 清洗字体列表：去掉极长 / 含不可打印或符号字符的族名（这些在默认 UI 字体里会显示成方块「乱码」）
     function looksOk(f) {
@@ -962,6 +1022,14 @@
     def.value = "";
     def.textContent = "默认（跟随系统）";
     el.fontSelect.appendChild(def);
+    if (hint) {
+      // 读取系统字体期间的占位提示（不可选中），保证下拉立刻有内容
+      var tip = document.createElement("option");
+      tip.value = "";
+      tip.disabled = true;
+      tip.textContent = hint;
+      el.fontSelect.appendChild(tip);
+    }
     clean.forEach(function (f) {
       var o = document.createElement("option");
       o.value = f;
@@ -995,20 +1063,22 @@
     if (el.davUser) el.davUser.value = state.dav.username || "";
     if (el.davPass) el.davPass.value = state.dav.password || "";
     if (el.davDir) el.davDir.value = state.dav.dir || "/easynote";
-    var fonts = FALLBACK_FONTS.slice();
-    if (window.electronAPI && typeof window.electronAPI.getSystemFonts === "function") {
-      window.electronAPI.getSystemFonts().then(function (list) {
-        if (list && list.length) fonts = list.slice();
-        fillFontSelect(fonts);
-      }).catch(function () {
-        fillFontSelect(fonts);
-      });
-    } else {
-      fillFontSelect(fonts);
-    }
     if (el.fontSizeSelect) el.fontSizeSelect.value = String(state.fontSize || 16);
     if (el.fontCustom) el.fontCustom.value = state.fontFamily || "";
+    // 关键：先把弹窗显示出来，再管字体列表。
+    // 以前是先 await 系统字体（macOS 旧实现要冻 15 秒）再把弹窗 hidden=false，
+    // 用户看到的就是「点设置，指针转半天」。现在弹窗立刻可用。
     el.settingsModal.hidden = false;
+
+    // 字体下拉：先用兜底列表秒填，系统字体到了再整体替换（通常 <50ms，无感）
+    fillFontSelect(FALLBACK_FONTS.slice(), "正在读取系统字体…");
+    if (window.electronAPI && typeof window.electronAPI.getSystemFonts === "function") {
+      window.electronAPI.getSystemFonts().then(function (list) {
+        fillFontSelect(list && list.length ? list : FALLBACK_FONTS.slice());
+      }).catch(function () {
+        fillFontSelect(FALLBACK_FONTS.slice());
+      });
+    }
   }
 
   function applyCustomFont() {
