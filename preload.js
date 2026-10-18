@@ -22,8 +22,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getClipboardText: function () {
     return ipcRenderer.invoke("get-clipboard-text");
   },
-  pickImage: function () {
-    return ipcRenderer.invoke("pick-image");
+  pickImage: function (mode) {
+    return ipcRenderer.invoke("pick-image", mode);
   },
   onUpdateAvailable: function (cb) {
     ipcRenderer.on("update-available", function (_e, info) {

@@ -12,6 +12,7 @@
   var USER_KEY = "simplenote_zh_user";
   var PURGE_KEY = "simplenote_zh_purged"; // 已永久删除的笔记 ID（墓碑，防止同步时被还原）
   var DAV_KEY = "simplenote_zh_webdav";
+  var IMGMODE_KEY = "simplenote_zh_imgmode"; // embed | path（插入图片的方式）
   // 纯浏览器环境（无 Electron）下的回退字体清单（均为 Windows 常见中文字体）
   var FALLBACK_FONTS = [
     "微软雅黑", "Microsoft YaHei", "等线", "Dengxian", "黑体", "SimHei",
@@ -82,6 +83,7 @@
     lastSyncTs: 0,
     purged: [], // 永久删除的笔记 ID 墓碑
     dav: { server: "", username: "", password: "", dir: "/easynote" },
+    imageMode: "embed", // 'embed' 内嵌进笔记 | 'path' 引用原文件路径
   };
 
   /* ---------------- 存储 ---------------- */
@@ -104,6 +106,9 @@
     }
     state.fontFamily = store.getItem(FONT_KEY) || "";
     state.fontSize = parseInt(store.getItem(FONTSIZE_KEY) || "16", 10) || 16;
+    // 图片插入方式：默认内嵌（换设备也看得到）；"path" 为引用原文件路径（笔记体积小）
+    var imgMode = store.getItem(IMGMODE_KEY);
+    state.imageMode = imgMode === "path" ? "path" : "embed";
     state.serverUrl = store.getItem(SERVER_KEY) || "http://localhost:3000";
     state.token = store.getItem(TOKEN_KEY) || "";
     state.user = store.getItem(USER_KEY) || "";
@@ -229,9 +234,13 @@
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\*([^*]+)\*/g, "<em>$1</em>")
       .replace(/`([^`]+)`/g, "<code>$1</code>")
-      // 图片：![alt](url) → <img>，点击在外部程序打开
+      // 图片：![alt](url) → <img>，点击在外部程序打开。
+      // file:// 的本地图片改写为 easynote-file://（主进程按路径读取），
+      // 绕过 Chromium 对 file:// 页面跨目录加载图片的限制；原文件丢失时给出提示样式。
       .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_m, alt, url) {
-        return '<img class="md-img" alt="' + escapeAttr(alt) + '" src="' + escapeAttr(url) + '" title="点击在外部打开">';
+        var src = /^file:\/\//i.test(url) ? "easynote-file://" + url.replace(/^file:\/\//i, "") : url;
+        return '<img class="md-img" alt="' + escapeAttr(alt) + '" src="' + escapeAttr(src) +
+          '" title="点击在外部打开" onerror="this.setAttribute(\'data-missing\',\'1\')">';
       })
       // 链接：[text](url) → <a data-mdlink>，点击用默认浏览器打开
       .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_m, t, url) {
@@ -319,6 +328,7 @@
     el.settingsModal = document.getElementById("settingsModal");
     el.settingsClose = document.getElementById("settingsClose");
     el.themeModeSelect = document.getElementById("themeModeSelect");
+    el.imageModeSelect = document.getElementById("imageModeSelect");
     el.fontSelect = document.getElementById("fontSelect");
     el.fontCustom = document.getElementById("fontCustom");
     el.fontCustomApply = document.getElementById("fontCustomApply");
@@ -812,6 +822,13 @@
         toast("主题已切换");
       });
     }
+    if (el.imageModeSelect) {
+      el.imageModeSelect.addEventListener("change", function () {
+        state.imageMode = el.imageModeSelect.value === "path" ? "path" : "embed";
+        store.setItem(IMGMODE_KEY, state.imageMode);
+        toast(state.imageMode === "path" ? "图片将引用原文件路径（笔记更小）" : "图片将内嵌进笔记（换设备也看得到）");
+      });
+    }
     el.fontSelect.addEventListener("change", function () {
       state.fontFamily = el.fontSelect.value;
       store.setItem(FONT_KEY, state.fontFamily);
@@ -883,6 +900,7 @@
 
   function openSettings() {
     if (el.themeModeSelect) el.themeModeSelect.value = state.themeMode;
+    if (el.imageModeSelect) el.imageModeSelect.value = state.imageMode;
     if (el.davUrl) el.davUrl.value = state.dav.server || "";
     if (el.davUser) el.davUser.value = state.dav.username || "";
     if (el.davPass) el.davPass.value = state.dav.password || "";
@@ -1310,16 +1328,27 @@
     if (!note || note.deleted) return;
     var api = window.electronAPI;
     if (!api || !api.pickImage) { toast("当前环境不支持选择图片"); return; }
-    api.pickImage().then(function (r) {
+    var mode = state.imageMode === "path" ? "path" : "embed";
+    api.pickImage(mode).then(function (r) {
       if (!r) return;
       var name = r.name || "图片";
-      // 以 data: URI 内嵌，预览时不受 file:// 跨目录限制，三端均可显示
-      var md = "\n![" + name + "](" + r.dataUrl + ")\n";
+      var md;
+      if (mode === "path" && r.path) {
+        // 引用模式：笔记里存 file:// 路径（体积小、通用），
+        // 预览时由主进程经 easynote-file:// 自定义协议读取显示
+        md = "\n![" + name + "](" + fileUrl(r.path) + ")\n";
+      } else {
+        if (!r.dataUrl) { toast("插入图片失败"); return; }
+        // 内嵌模式：data URI 写进笔记，不受 file:// 跨目录限制，三端均可显示
+        md = "\n![" + name + "](" + r.dataUrl + ")\n";
+      }
       insertAtCursor(el.editor, md);
       triggerInput(el.editor);
       // 图片需 Markdown + 预览才能显示：自动开启本笔记的 Markdown（启用 👁 预览按钮）
       if (!note.markdown) { note.markdown = true; save(); setToolbar(note); }
-      toast("已插入图片，点 👁 预览查看（图片已内嵌保存）");
+      toast(mode === "path"
+        ? "已插入图片（引用原文件），点 👁 预览查看"
+        : "已插入图片，点 👁 预览查看（图片已内嵌保存）");
     }).catch(function () { toast("插入图片失败"); });
   }
 
@@ -1474,52 +1503,83 @@
     var api = window.electronAPI;
     if (!api || !api.getAppVersion) return;
 
-    api.getAppVersion().then(function (v) {
-      var el = document.getElementById("appVersion");
-      if (el) el.textContent = "v" + v;
-    });
-
+    var badge = document.getElementById("appVersion");
     var banner = document.getElementById("updateBanner");
     var text = document.getElementById("updateText");
     var dl = document.getElementById("updateDownloadBtn");
     var dismiss = document.getElementById("updateDismissBtn");
-    if (!banner) return;
 
+    var appVersion = "";
     var releaseUrl = "";
+    var bannerTimer = null;
+
+    api.getAppVersion().then(function (v) {
+      appVersion = v || "";
+      if (badge) badge.textContent = "v" + appVersion;
+    });
+
+    // 侧栏横幅作为统一提示条：发现新版本 / 已是最新 / 检查失败（可重试）
+    function showBanner(msg, actionLabel, actionFn, autoHideMs) {
+      if (!banner) return;
+      if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+      if (text) text.textContent = msg;
+      if (dl) {
+        if (actionLabel && actionFn) {
+          dl.textContent = actionLabel;
+          dl.hidden = false;
+          dl.onclick = actionFn;
+        } else {
+          dl.hidden = true;
+          dl.onclick = null;
+        }
+      }
+      banner.hidden = false;
+      if (autoHideMs) {
+        bannerTimer = setTimeout(function () { banner.hidden = true; }, autoHideMs);
+      }
+    }
+
     function showUpdate(info) {
       if (!info || !info.version) return;
       releaseUrl = info.url || "";
-      if (text) text.textContent = "发现新版本 v" + info.version;
-      banner.hidden = false;
-    }
-
-    api.onUpdateAvailable(showUpdate);
-
-    if (dl) {
-      dl.addEventListener("click", function () {
+      showBanner("发现新版本 v" + info.version, "下载", function () {
         if (releaseUrl && api.openExternal) api.openExternal(releaseUrl);
       });
     }
-    if (dismiss) {
-      dismiss.addEventListener("click", function () {
-        banner.hidden = true;
-      });
+
+    if (banner) {
+      // 主进程自动检查发现新版本时推送（启动 5 秒后 / 每 6 小时 / 失败 10 分钟重试）
+      api.onUpdateAvailable(showUpdate);
+      if (dismiss) {
+        dismiss.addEventListener("click", function () { banner.hidden = true; });
+      }
     }
 
-    // 点击版本徽标 → 手动检查更新
-    var badge = document.getElementById("appVersion");
+    // 点击版本徽标 → 手动检查更新，结果明确可见（不再静默重置）
+    function manualCheck() {
+      if (!api.checkUpdate) return;
+      if (badge) badge.textContent = "检查中…";
+      api.checkUpdate().then(function (r) {
+        api.getAppVersion().then(function (v) {
+          appVersion = v || "";
+          if (badge) badge.textContent = "v" + appVersion;
+        });
+        if (r && r.ok && r.hasUpdate && r.latest) {
+          showUpdate(r.latest); // 事件通道通常会先到，这里双保险
+        } else if (r && r.ok) {
+          showBanner("✓ 已是最新版本 v" + appVersion, null, null, 4000);
+        } else {
+          showBanner("检查更新失败：网络不可达", "重试", manualCheck, 15000);
+        }
+      }).catch(function () {
+        if (badge) badge.textContent = "v" + appVersion;
+        showBanner("检查更新失败：网络不可达", "重试", manualCheck, 15000);
+      });
+    }
     if (badge && api.checkUpdate) {
       badge.style.cursor = "pointer";
       badge.title = "点击检查更新";
-      badge.addEventListener("click", function () {
-        badge.textContent = "检查中…";
-        api.checkUpdate().then(function () {
-          // 更新横幅由 update-available 事件驱动，这里只恢复版本号显示
-          api.getAppVersion().then(function (v) {
-            badge.textContent = "v" + v;
-          });
-        });
-      });
+      badge.addEventListener("click", manualCheck);
     }
   }
 

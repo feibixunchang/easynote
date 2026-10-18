@@ -1,5 +1,5 @@
 /* ============ Electron 主进程 ============ */
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme, clipboard } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme, clipboard, protocol } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { execSync, execFile } = require("child_process");
@@ -251,6 +251,65 @@ function toggleWindow() {
 
 /* ============ 版本号 / 更新检查 ============ */
 let latestRelease = null; // { version, url }
+let updateTimer = null;
+
+// 更新检查调度：成功后 6 小时再查；失败 10 分钟后重试（国内网络首次查不到时不会干等 6 小时）
+function scheduleUpdateCheck(delayMs) {
+  if (updateTimer) clearTimeout(updateTimer);
+  updateTimer = setTimeout(function () {
+    checkUpdate(false);
+  }, delayMs);
+}
+
+// 带超时的 fetch：网络挂起时不会无限等待（Electron 主进程可用 AbortController）
+function fetchWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(function () { ctrl.abort(); }, ms || 12000);
+  return fetch(url, {
+    headers: { Accept: "application/vnd.github+json", "User-Agent": "easynote-update-check" },
+    signal: ctrl.signal,
+  }).finally(function () { clearTimeout(timer); });
+}
+
+// 多渠道探测最新版本号（任一成功即返回 "x.y.z" 字符串）：
+//  ① api.github.com REST 接口：信息最全，但未认证限额 60 次/小时/IP，
+//     共用出口 IP（公司网络/代理）容易被限流返回 403；
+//  ② github.com 的 /releases/latest 页面：302 重定向到最新 tag 的页面，
+//     走 web 节点、限额宽得多，国内可达性通常也更好；
+//  ③ releases.atom 订阅源：同为 web 节点，XML 里第一条即最新 Release。
+// 三端（macOS/Windows/Linux）通用；全部失败才判定为检查失败。
+async function fetchLatestVersion() {
+  const repo = REPO_OWNER + "/" + REPO_NAME;
+
+  // ① REST API
+  try {
+    const res = await fetchWithTimeout("https://api.github.com/repos/" + repo + "/releases/latest");
+    if (res.ok) {
+      const data = await res.json();
+      const tag = String((data && data.tag_name) || "").replace(/^v/i, "");
+      if (tag) return tag;
+    }
+  } catch (e) { /* 尝试下一个渠道 */ }
+
+  // ② /releases/latest 页面重定向
+  try {
+    const res = await fetchWithTimeout("https://github.com/" + repo + "/releases/latest");
+    const m = String(res.url || "").match(/\/releases\/tag\/([^/?#]+)/);
+    if (m && m[1]) return m[1].replace(/^v/i, "");
+  } catch (e) { /* 尝试下一个渠道 */ }
+
+  // ③ releases.atom
+  try {
+    const res = await fetchWithTimeout("https://github.com/" + repo + "/releases.atom");
+    if (res.ok) {
+      const xml = await res.text();
+      const m = xml.match(/<id>tag:github\.com,2008:Repository\/\d+\/([^<]+)<\/id>/);
+      if (m && m[1]) return m[1].replace(/^v/i, "");
+    }
+  } catch (e) { /* 全部失败 */ }
+
+  return null;
+}
 
 function compareVersions(a, b) {
   const pa = String(a).replace(/^v/i, "").split(".").map(function (n) {
@@ -280,19 +339,12 @@ function hasNewVersion() {
 
 async function checkUpdate(manual) {
   try {
-    const res = await fetch(
-      "https://api.github.com/repos/" + REPO_OWNER + "/" + REPO_NAME + "/releases/latest",
-      {
-        headers: {
-          Accept: "application/vnd.github+json",
-          "User-Agent": "easynote-update-check",
-        },
-      }
-    );
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    const version = String(data.tag_name || "").replace(/^v/i, "");
-    latestRelease = { version: version, url: data.html_url || "" };
+    const version = await fetchLatestVersion();
+    if (!version) throw new Error("all channels failed");
+    latestRelease = {
+      version: version,
+      url: "https://github.com/" + REPO_OWNER + "/" + REPO_NAME + "/releases/tag/v" + version,
+    };
 
     if (compareVersions(version, APP_VERSION) > 0) {
       refreshTrayMenu();
@@ -300,15 +352,19 @@ async function checkUpdate(manual) {
         mainWindow.webContents.send("update-available", latestRelease);
       }
       notify("简易笔记 · 发现新版本", "最新版 v" + version + " 已发布，点击托盘图标可下载");
+      scheduleUpdateCheck(6 * 60 * 60 * 1000);
       return { ok: true, hasUpdate: true, latest: latestRelease };
     }
 
     refreshTrayMenu();
     if (manual) notify("简易笔记", "当前已是最新版本 v" + APP_VERSION);
+    scheduleUpdateCheck(6 * 60 * 60 * 1000);
     return { ok: true, hasUpdate: false };
   } catch (e) {
+    // 失败时把原因带回渲染端，界面明确提示（不再静默）；10 分钟后自动重试
+    scheduleUpdateCheck(10 * 60 * 1000);
     if (manual) notify("简易笔记", "检查更新失败，请稍后重试");
-    return { ok: false, error: String((e && e.message) || e) };
+    return { ok: false, hasUpdate: false, error: String((e && e.message) || e) };
   }
 }
 
@@ -346,8 +402,17 @@ ipcMain.handle("check-update", function () {
 });
 
 ipcMain.handle("open-external", function (_e, url) {
-  if (typeof url === "string" && /^https?:\/\//.test(url)) {
+  if (typeof url !== "string" || !url) return;
+  if (/^https?:\/\//.test(url)) {
     shell.openExternal(url);
+    return;
+  }
+  // easynote-file:///… → 用系统默认程序打开本地文件（"引用路径"模式图片的点击打开）
+  const m = url.match(/^easynote-file:\/\/(.*)$/i);
+  if (m) {
+    let p = decodeURIComponent(m[1]);
+    if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1); // Windows: /C:/x → C:/x
+    shell.openPath(p);
   }
 });
 
@@ -372,12 +437,10 @@ const MIME_BY_EXT = {
   ".heic": "image/heic",
 };
 
-// 弹出系统文件选择框，挑选要插入的图片，返回 { name, dataUrl }（取消则返回 null）
-// dataUrl 为内嵌 base64（data:image/...;base64,...）：
-//  ① 预览时不受 Chromium 对 file:// 跨目录访问的限制，三端都能正常显示；
-//  ② 图片随笔记一起保存，原文件被移动 / 删除也不影响显示。
-// 过大的图片会等比缩小（最长边 ≤ 1600px），控制笔记体积。
-ipcMain.handle("pick-image", function () {
+// 弹出系统文件选择框，挑选要插入的图片。
+// mode = "path" 时只返回 { name, path }（不读文件、不转码，笔记里存引用）；
+// mode = "embed"（默认）时额外返回 { dataUrl }（必要时等比缩小后内嵌 base64）。
+ipcMain.handle("pick-image", function (_e, mode) {
   if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve(null);
   return dialog
     .showOpenDialog(mainWindow, {
@@ -390,14 +453,16 @@ ipcMain.handle("pick-image", function () {
     .then(function (res) {
       if (res.canceled || !res.filePaths || !res.filePaths.length) return null;
       const p = res.filePaths[0];
+      const name = path.basename(p);
+      // 引用路径模式：只给路径，渲染端拼 file:// 存入笔记
+      if (mode === "path") return { name: name, path: p };
       try {
         const buf = fs.readFileSync(p);
-        const name = path.basename(p);
         let img = nativeImage.createFromBuffer(buf);
         if (img.isEmpty()) {
           // 个别格式（如 heic）nativeImage 解码失败，直接以原始字节内嵌
           const mime = MIME_BY_EXT[path.extname(p).toLowerCase()] || "image/png";
-          return { name: name, dataUrl: "data:" + mime + ";base64," + buf.toString("base64") };
+          return { name: name, path: p, dataUrl: "data:" + mime + ";base64," + buf.toString("base64") };
         }
         // 过大则等比缩小，控制笔记体积（最长边 ≤ 1600px）
         const s = img.getSize();
@@ -407,7 +472,7 @@ ipcMain.handle("pick-image", function () {
           const f = MAX / longest;
           img = img.resize({ width: Math.round(s.width * f), height: Math.round(s.height * f) });
         }
-        return { name: name, dataUrl: img.toDataURL() };
+        return { name: name, path: p, dataUrl: img.toDataURL() };
       } catch (e) {
         return null;
       }
@@ -416,6 +481,39 @@ ipcMain.handle("pick-image", function () {
       return null;
     });
 });
+
+// 「引用文件路径」模式的图片显示：渲染端把 markdown 里的 file:// 改写为
+// easynote-file:// 后由这里按本地路径读取返回（Chromium 禁止 file:// 页面
+// 跨目录加载 file:// 图片，故借自定义协议绕过；只放行图片类型）。
+const IMG_MIME_BY_EXT = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".svg": "image/svg+xml",
+  ".heic": "image/heic",
+  ".avif": "image/avif",
+  ".ico": "image/x-icon",
+};
+function registerLocalFileProtocol() {
+  protocol.handle("easynote-file", function (request) {
+    try {
+      const u = new URL(request.url);
+      let p = decodeURIComponent(u.pathname);
+      if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1); // Windows: /C:/x → C:/x
+      const mime = IMG_MIME_BY_EXT[path.extname(p).toLowerCase()];
+      if (!mime) return new Response("forbidden", { status: 403 });
+      const buf = fs.readFileSync(p);
+      return new Response(buf, {
+        headers: { "Content-Type": mime, "Cache-Control": "no-cache" },
+      });
+    } catch (e) {
+      return new Response("not found", { status: 404 });
+    }
+  });
+}
 
 ipcMain.handle("set-titlebar-dark", function (_e, dark) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -627,12 +725,13 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    registerLocalFileProtocol();
     mainWindow = createWindow();
     buildMenu(mainWindow);
     createTray();
-    // 启动 5 秒后静默检查一次更新，之后每 6 小时一次
-    setTimeout(() => checkUpdate(false), 5000);
-    setInterval(() => checkUpdate(false), 6 * 60 * 60 * 1000);
+    // 启动 5 秒后静默检查一次更新；之后由 scheduleUpdateCheck 自动续期
+    // （成功 → 6 小时；失败 → 10 分钟重试）
+    scheduleUpdateCheck(5000);
     // 系统深浅色变化时推送给渲染进程（跟随系统模式）
     nativeTheme.on("updated", () => {
       [mainWindow, ...BrowserWindow.getAllWindows()].forEach(function (w) {

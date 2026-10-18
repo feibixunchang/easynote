@@ -374,6 +374,19 @@ body {
   display: block;
   cursor: zoom-in;
 }
+/* 引用路径模式下原图丢失：显示为提示占位块 */
+.preview-pane img.md-img[data-missing] {
+  min-width: 140px;
+  min-height: 44px;
+  max-width: 100%;
+  background: var(--accent-soft);
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: default;
+}
 .preview-pane hr { border: none; border-top: 1px solid var(--border-strong); margin: 1em 0; }
 
 .editor-empty {
