@@ -2,12 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CAPACITOR_DEBUG</key>
+	<key>CAPACITOR_DEBUG</key>
 	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>简易笔记</string>
+	<string>简易笔记</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -24,24 +24,35 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>需要使用相机拍摄照片并插入到笔记中</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>需要保存图片到相册</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>需要从相册选择图片并插入到笔记中</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
-    <false/>
-    <key>UISceneConfigurations</key>
-    <dict>
-      <key>UIWindowSceneSessionRoleApplication</key>
-      <array>
-        <dict>
-            <key>UISceneConfigurationName</key>
-            <string>Default Configuration</string>
-            <key>UISceneDelegateClassName</key>
-            <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-            <key>UISceneStoryboardFile</key>
-            <string>Main</string>
-        </dict>
-      </array>
-    </dict>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
 	</dict>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
@@ -66,17 +77,5 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<!-- 允许访问局域网内的 HTTP 同步服务端（如 http://192.168.x.x:3050） -->
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
-	<key>NSCameraUsageDescription</key>
-	<string>需要使用相机拍摄照片并插入到笔记中</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>需要从相册选择图片并插入到笔记中</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>需要保存图片到相册</string>
 </dict>
 </plist>

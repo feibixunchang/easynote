@@ -22,7 +22,8 @@
   var PUSHED_KEY = "simplenote_zh_pushed";
   var TOTAL_KEY = "simplenote_zh_total";
   var DAV_KEY = "simplenote_zh_webdav";
-  var APP_VERSION = "1.0.0";
+  // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
+  var APP_VERSION = "1.0.1";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -49,12 +50,26 @@
   })();
 
   /* ---------------- 平台能力 ---------------- */
-  var Cap = window.Capacitor || null;
+  // 惰性读取 window.Capacitor：原生桥接脚本注入时机在不同平台/版本下不完全一致，
+  // 若在脚本解析时就缓存 var Cap = window.Capacitor，可能拿到 null 导致
+  // 后续所有原生能力（状态栏、相机、CapacitorHttp…）静默失效。
+  function cap() {
+    return window.Capacitor || window.Cap || null;
+  }
   function plugin(name) {
-    try { return Cap && Cap.Plugins ? Cap.Plugins[name] : null; } catch (e) { return null; }
+    try {
+      var c = cap();
+      if (!c) return null;
+      if (c.Plugins && c.Plugins[name]) return c.Plugins[name];
+      // 部分版本直接挂在 Cap 上（如 Cap.CapacitorHttp）
+      return c[name] || null;
+    } catch (e) { return null; }
   }
   function isNative() {
-    try { return !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform()); } catch (e) { return false; }
+    try {
+      var c = cap();
+      return !!(c && c.isNativePlatform && c.isNativePlatform());
+    } catch (e) { return false; }
   }
   function utf8ToBase64(s) {
     return btoa(unescape(encodeURIComponent(s)));
@@ -182,7 +197,9 @@
     var dark = state.themeMode === "dark" ||
       (state.themeMode === "auto" && isSystemDark());
     state.dark = dark;
+    // 同步挂到 html（:root）与 body：html 的背景负责绘制刘海/状态栏那一行
     document.body.classList.toggle("dark", dark);
+    document.documentElement.classList.toggle("dark", dark);
     var meta = document.getElementById("themeColorMeta");
     if (meta) meta.setAttribute("content", dark ? "#101216" : "#f5f6f8");
     // 同步原生状态栏（深色模式用浅色文字）
@@ -378,6 +395,7 @@
     el.accLoggedIn = document.getElementById("accLoggedIn");
     el.accName = document.getElementById("accName");
     el.syncStatus = document.getElementById("syncStatus");
+    el.btnEmptyTrash = document.getElementById("btnEmptyTrash");
     el.themeModeSelect = document.getElementById("themeModeSelect");
     el.fontSelect = document.getElementById("fontSelect");
     el.fontCustom = document.getElementById("fontCustom");
@@ -632,6 +650,11 @@
     el.listTitle.textContent = state.view === "trash" ? "回收站" :
       (state.activeTag ? "#" + state.activeTag : "全部笔记");
     el.btnTheme.textContent = state.dark ? "☀" : "🌙";
+    // 回收站视图且有内容时显示「清空回收站」
+    if (el.btnEmptyTrash) {
+      var trashed = state.view === "trash" && getNotes().length > 0;
+      el.btnEmptyTrash.hidden = !trashed;
+    }
     renderTags();
     var list = getNotes();
     var cur = currentNote();
@@ -640,6 +663,23 @@
     }
     renderList();
     renderEditor();
+  }
+  // 切换底部导航时只刷新列表相关 UI（避免每次全量 renderAll 造成的卡顿 / 生硬）
+  function refreshListView() {
+    document.body.setAttribute("data-view", state.view);
+    el.listTitle.textContent = state.view === "trash" ? "回收站" :
+      (state.activeTag ? "#" + state.activeTag : "全部笔记");
+    el.btnTheme.textContent = state.dark ? "☀" : "🌙";
+    if (el.btnEmptyTrash) {
+      var trashed = state.view === "trash" && getNotes().length > 0;
+      el.btnEmptyTrash.hidden = !trashed;
+    }
+    var list = getNotes();
+    var cur = currentNote();
+    if (!cur || !!cur.deleted !== (state.view === "trash")) {
+      state.currentId = list.length ? list[0].id : null;
+    }
+    renderList();
   }
 
   /* ---------------- 屏幕导航 ---------------- */
@@ -719,6 +759,7 @@
         }
         state.notes = state.notes.filter(function (n) { return n.id !== note.id; });
         if (state.currentId === note.id) state.currentId = null;
+        purgeOnServer([note.id]);
         save(); renderAll();
         toast("已永久删除");
         break;
@@ -735,6 +776,27 @@
 
   /* ---------------- 底部动作面板 ---------------- */
   var sheetOnCancel = null;
+  // 通用确认弹窗（复用 .modal 样式）：标题 + 说明 + 取消/确认
+  function openConfirm(title, msg, onYes) {
+    var m = document.createElement("div");
+    m.className = "modal";
+    var box = document.createElement("div");
+    box.className = "modal-box";
+    var h = document.createElement("h3"); h.textContent = title || "确认";
+    var p = document.createElement("p"); p.textContent = msg || "";
+    var actions = document.createElement("div"); actions.className = "modal-actions";
+    var cancel = document.createElement("button"); cancel.className = "btn"; cancel.textContent = "取消";
+    var yes = document.createElement("button"); yes.className = "btn danger"; yes.textContent = "确认";
+    actions.appendChild(cancel); actions.appendChild(yes);
+    box.appendChild(h); box.appendChild(p); box.appendChild(actions); m.appendChild(box);
+    document.body.appendChild(m);
+    function close() { if (m.parentNode) m.parentNode.removeChild(m); }
+    cancel.addEventListener("click", close);
+    m.addEventListener("click", function (e) { if (e.target === m) close(); });
+    yes.addEventListener("click", function () { close(); if (onYes) onYes(); });
+    requestAnimationFrame(function () { m.removeAttribute("hidden"); });
+    return close;
+  }
   function showSheet(title, items, onCancel) {
     sheetOnCancel = onCancel || null;
     el.sheetTitle.textContent = title || "";
@@ -992,12 +1054,38 @@
     state.dav.dir = (el.davDir.value || "").trim() || "/easynote";
     store.setItem(DAV_KEY, JSON.stringify(state.dav));
   }
+  // WebDAV 请求：原生平台( Capacitor )走系统原生 HTTP，绕开 WebView 的同源策略(CORS)——
+  // WebDAV 服务器基本都不会回 CORS 头，WebView 里直接 fetch 必然被浏览器拦掉，
+  // 这正是「电脑端能连、iPhone 连不上」的根因。CapacitorHttp 由 @capacitor/core 内置
+  // （无需额外安装插件），在原生端调用即走 NSURLSession，不受 CORS 限制。
+  // 浏览器/普通网页环境没有该插件，仍回退 fetch。
   function davFetch(cfg, method, path, body) {
     var headers = {
       Authorization: "Basic " + utf8ToBase64(cfg.username + ":" + cfg.password),
     };
     if (body !== undefined && body !== null) headers["Content-Type"] = "application/json";
-    return fetch(cfg.server + path, { method: method, headers: headers, body: body });
+    var url = cfg.server + path;
+    var http = plugin("CapacitorHttp");
+    if (http && http.request) {
+      var opts = {
+        url: url,
+        method: method,
+        headers: headers,
+        connectTimeout: 15000,
+        readTimeout: 30000,
+      };
+      if (body !== undefined && body !== null) opts.data = body;
+      return http.request(opts).then(function (r) {
+        // 原生返回 { status, headers, data }，包成类 Response 对象供上层统一处理
+        return {
+          status: r && typeof r.status === "number" ? r.status : 0,
+          ok: !!(r && r.status >= 200 && r.status < 300),
+          data: r ? r.data : null,
+          text: function () { return Promise.resolve(r && r.data != null ? String(r.data) : ""); },
+        };
+      });
+    }
+    return fetch(url, { method: method, headers: headers, body: body });
   }
   function testDav() {
     var cfg = davConfig();
@@ -1015,7 +1103,7 @@
         }
       })
       .catch(function () {
-        toast("连接失败：地址不可达，或被浏览器跨域策略拦截（可改用「导出备份」分享）");
+        toast("连接失败：请检查地址是否可达（需填 https:// 开头），以及账号/授权码是否正确");
       });
   }
   function exportToDav() {
@@ -1041,7 +1129,7 @@
         toast("导出完成：" + state.notes.length + " 条 → " + dir);
       })
       .catch(function () {
-        toast("导出失败：地址不可达，或被浏览器跨域策略拦截（可改用「导出备份」分享）");
+        toast("导出失败：请检查地址是否可达（需填 https:// 开头），以及账号/授权码是否正确");
       });
   }
   function safeFileName(n) {
@@ -1404,6 +1492,15 @@
       changed = mergeNotes(res.notes);
       if (changed) filterPurged();
     }
+    // 跨端墓碑：其他设备永久删除的笔记，本地也清掉，保持回收站一致
+    if (res && res.removed && res.removed.length) {
+      var removedSet = {};
+      res.removed.forEach(function (id) { removedSet[id] = true; if (state.purged.indexOf(id) === -1) state.purged.push(id); });
+      store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+      var before = state.notes.length;
+      state.notes = state.notes.filter(function (n) { return !removedSet[n.id]; });
+      if (state.notes.length !== before) { changed = true; saveLocalOnly(); }
+    }
     if (res && typeof res.serverTime === "number" && res.serverTime > 0) {
       state.since = res.serverTime;
       store.setItem(SINCE_KEY, String(state.since));
@@ -1489,6 +1586,12 @@
     store.setItem(PUSHED_KEY, "{}");
     store.setItem(TOTAL_KEY, "0");
   }
+  // 把永久删除上报到服务端（记入墓碑），让其他设备也清掉
+  function purgeOnServer(ids) {
+    if (!state.token || !ids || !ids.length) return;
+    api("/api/notes/purge", { method: "POST", body: JSON.stringify({ ids: ids }) })
+      .catch(function () { /* 失败不阻塞本地删除，下次同步也会纠正 */ });
+  }
 
   /* ---------------- 外链图片检测（手机上只提示，修复需在电脑端） ---------------- */
   var EXTERNAL_IMG_RE = /!\[[^\]]*\]\((?:file|easynote-file):\/\/[^)\s]+\)/g;
@@ -1531,10 +1634,23 @@
   var SYSTEM_FONT_STACK =
     '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", ' +
     '"Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans CN", sans-serif';
+  // 把字体值（单个字体名 / 逗号分隔的字体栈）组装成合法的 CSS font-family 列表：
+  // 含空格的字体名自动加引号，已带引号则保持；最后追加系统字体栈兜底。
+  function tellFamily(f) {
+    f = (f || "").trim();
+    if (!f) return "";
+    if (/^["'].*["']$/.test(f)) return f;        // 已带引号，原样保留
+    if (/[\s]/.test(f)) return '"' + f + '"';    // 含空格 → 加引号
+    return f;
+  }
+  function buildFontStack(value) {
+    if (!value) return SYSTEM_FONT_STACK;
+    var parts = String(value).split(",").map(tellFamily).filter(function (t) { return t; });
+    parts.push(SYSTEM_FONT_STACK);
+    return parts.join(", ");
+  }
   function applySettings() {
-    var stack = state.fontFamily ? '"' + state.fontFamily + '", ' : "";
-    stack += SYSTEM_FONT_STACK;
-    document.documentElement.style.setProperty("--font", stack);
+    document.documentElement.style.setProperty("--font", buildFontStack(state.fontFamily));
     document.documentElement.style.setProperty("--editor-fs", (state.fontSize || 16) + "px");
   }
   function refreshSettingsUI() {
@@ -1703,9 +1819,27 @@
           else if (tab === "settings") { goSettings(); return; }
           else { state.view = "notes"; }
           if (document.body.getAttribute("data-screen") === "settings") setScreen("list");
-          renderAll();
+          refreshListView();
         });
       })(navBtns[i]);
+    }
+
+    // 清空回收站（本地 + 上报服务端，跨端一致）
+    if (el.btnEmptyTrash) {
+      el.btnEmptyTrash.addEventListener("click", function () {
+        var trashed = getNotes();
+        if (!trashed.length) return;
+        openConfirm("清空回收站", "将永久删除回收站里的 " + trashed.length + " 条笔记（不可恢复），并同步到所有设备？", function () {
+          var ids = trashed.map(function (n) { return n.id; });
+          ids.forEach(function (id) { if (state.purged.indexOf(id) === -1) state.purged.push(id); });
+          store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+          state.notes = state.notes.filter(function (n) { return state.purged.indexOf(n.id) === -1; });
+          state.currentId = null;
+          purgeOnServer(ids);
+          save(); renderAll();
+          toast("已清空回收站");
+        });
+      });
     }
 
     // 编辑器输入：自动保存 + 防抖刷新列表 + 标题/保存提示

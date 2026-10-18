@@ -52,8 +52,8 @@ git tag mobile-v1.0.1 && git push origin mobile-v1.0.1
 CI 会产出：
 
 - **Android**：可直接安装的 debug APK（无需签名证书）；
-- **iOS**：未签名 IPA（云端无苹果证书，需在 Mac 上重签名或用 AltStore / Sideloadly 侧载，
-  详见主 README「移动端」一节）。
+- **iOS**：未签名 IPA（云端无苹果证书，需在 Mac 上用 **Xcode 签名安装**，详见主 README「移动端」一节；
+  不想装 Xcode 也可用 AltStore / Sideloadly 侧载）。
 
 ## 云同步
 

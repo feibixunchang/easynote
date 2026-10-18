@@ -26,6 +26,10 @@
   --nav-h: 56px;
 }
 
+/* 深色变量同时挂在 :root(html) 与 body 上：
+   若只挂在 body，html 自身的 --bg 仍是浅色值，
+   而刘海/状态栏那一行由 html 背景绘制 → 深色模式下会出现"上浅下深"色差 */
+:root.dark,
 body.dark {
   --bg: #101216;
   --surface: #1a1d23;
@@ -51,6 +55,9 @@ html, body {
   padding: 0;
   height: 100%;
   overscroll-behavior: none;
+  /* 刘海/状态栏那一行由 html 的背景兜底：iOS 会把超出安全区的部分
+     用根元素背景填充，若 html 透明就会露出 body 之外的颜色，出现色差 */
+  background: var(--bg);
 }
 
 body {
@@ -97,7 +104,7 @@ body[data-screen="settings"] #screenSettings { display: flex; }
 /* ---------- 顶部应用栏 ---------- */
 .appbar {
   flex: none;
-  background: var(--surface);
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
   padding-top: env(safe-area-inset-top);
   z-index: 10;
@@ -359,7 +366,7 @@ body.dark .sync-pill.ok { color: #4ade80; }
 .bottom-nav {
   flex: none;
   display: flex;
-  background: var(--surface);
+  background: var(--bg);
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
   z-index: 15;
@@ -731,4 +738,17 @@ body.dark .sync-pill.ok { color: #4ade80; }
   .chip-row { padding-bottom: 6px; }
   .note-card { padding: 9px 12px; margin-bottom: 8px; }
   .card-snippet { -webkit-line-clamp: 1; }
+}
+
+/* ---------------- 字体预览 ---------------- */
+.font-preview {
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 8px;
 }

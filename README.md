@@ -75,13 +75,18 @@ CI 没有苹果开发者证书，产物是 **ad-hoc 签名**。从浏览器下�
   返回键优先返回列表，切到后台再回来会自动同步。
 - **Android**：Release 页面下载 APK 直接安装（需允许「安装未知应用」）；
   内网 HTTP 同步服务器已允许（`usesCleartextTraffic`）。
-- **iOS**：云端没有苹果开发者证书，产物为**未签名 IPA**，iPhone 不能直接安装，需：
-  1. **Mac + Xcode 重签名（推荐）**：解压 IPA 得到 `Payload/App.app`，用 Xcode 打开
-     `mobile/ios/App/App.xcodeproj`，登录自己的 Apple ID（免费账号即可，签名 7 天有效），
-     选自己的 iPhone 运行；
-  2. **AltStore / Sideloadly 侧载**：按工具指导致导入 IPA 并用 Apple ID 签名。
+- **iOS**：云端没有苹果开发者证书，产物为**未签名 IPA**，iPhone 不能直接安装。**推荐用 Xcode 在 Mac 上签名安装**（苹果原生通道、最稳，免费 Apple ID 即可，签名 7 天有效）：
+  1. 在 Mac 装好 [Xcode](https://developer.apple.com/xcode/)（App Store 约 15GB，首次启动需装组件并同意许可）；
+  2. 打开 `mobile/ios/App/App.xcodeproj`；
+  3. **Xcode → Settings → Accounts** 登录你的 Apple ID（免费账号会显示为「Personal Team」）；
+  4. 选中 **TARGETS → App → Signing & Capabilities**，Team 选你的 Personal Team（已默认勾选「自动签名」）；
+  5. iPhone 开启**开发者模式**（设置 → 隐私与安全性 → 开发者模式，需重启）并信任本 Mac；
+  6. 顶部设备选你的 iPhone，按 `⌘ R` 运行；装好后到 **设置 → 通用 → VPN 与设备管理** 信任开发者即可打开。
+  - 免费签名 **7 天有效**，到期重连 Mac 再 `⌘ R` 一次即可续签。
+  - 完整截图级步骤见 **[xcode-tutorial.html](./xcode-tutorial.html)**。
+  - 不想装 Xcode 的备选：**AltStore / Sideloadly 侧载**——下载 Release 里的 `easynote-mobile-v*-ios-unsigned.ipa` 用工具导入并签名（详见 [sideloadly-tutorial.html](./sideloadly-tutorial.html)，注意 2FA 需用应用专用密码）。
 
-> 移动端版本号独立计数：桌面端 tag 为 `v1.2.8`，移动端 tag 为 `mobile-v1.0.0`。
+> 移动端版本号独立计数：桌面端 tag 为 `v1.2.9`，移动端 tag 为 `mobile-v1.0.1`。
 > 两边更新检查只认自己的标签，互不打扰。
 
 ## 🔔 更新提示
@@ -89,7 +94,7 @@ CI 没有苹果开发者证书，产物是 **ad-hoc 签名**。从浏览器下�
 - 软件**启动几秒后自动检查**一次新版，之后每 6 小时检查一次（检查失败会 10 分钟后自动重试）；发现新版本会在**左侧栏弹出横幅**（显示新版本号 + 「下载」按钮），点击即打开下载页。
 - 也可以**手动检查**：点击侧栏左上角的**版本号徽标**（如 `v1.2.6`）——结果会明确显示：`发现新版本` / `✓ 已是最新版本` / `检查更新失败`（失败时可点横幅上的「重试」）。
 - 检查走**多渠道兜底**：GitHub API（releases 列表）→ releases 页面重定向 → releases.atom，任一通道成功即可（API 有每小时限额，国内网络下备用通道更稳）。
-- 桌面端只认纯 semver 标签（`v1.2.8` / `1.2.8` / `1.2`），移动端的 `mobile-v*` 标签会被忽略——两边更新互不打扰。
+- 桌面端只认纯 semver 标签（`v1.2.9` / `1.2.9` / `1.2`），移动端的 `mobile-v*` 标签会被忽略；移动端反过来只认 `mobile-v*`——两边更新互不打扰。
 - 由于没有开发者证书，暂不支持"一键自动升级"，采用「检测到新版 → 提示 → 前往下载页手动装」的方式。
 
 ## 💾 笔记数据保存在哪里
@@ -184,6 +189,8 @@ npm start                   # 默认监听 http://localhost:3000
 | `server/` | 云同步服务端（Express + JWT + 文件存储） |
 | `.github/workflows/build.yml` | GitHub Actions 三端自动打包工作流（tag `v*`） |
 | `.github/workflows/mobile.yml` | GitHub Actions 移动端打包工作流（tag `mobile-v*`） |
+| `xcode-tutorial.html` | iOS 用 Xcode 签名安装「简易笔记」的截图级教程（推荐方案） |
+| `sideloadly-tutorial.html` | iOS 侧载（Sideloadly / AltStore）备选方案截图级教程 |
 
 ## 已知范围
 

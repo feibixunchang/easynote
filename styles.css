@@ -544,3 +544,18 @@ button.primary:hover { filter: brightness(1.05); }
   .sidebar { width: 170px; flex-basis: 170px; }
   .note-list-pane { width: 240px; flex-basis: 240px; }
 }
+
+/* ---------------- 字体预览 ---------------- */
+/* 跟随 --font 实时变化；字体没装时浏览器会自动回退，视觉上就能立刻看出来 */
+.font-preview {
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 6px;
+  word-break: break-all;
+}

@@ -606,6 +606,7 @@
         }
         state.notes = state.notes.filter(function (n) { return n.id !== note.id; });
         if (state.currentId === note.id) state.currentId = null;
+        purgeOnServer([note.id]);
         save(); render();
         toast("已永久删除");
         break;
@@ -902,24 +903,48 @@
   var SYSTEM_FONT_STACK =
     '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", ' +
     '"Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans CN", sans-serif';
+  // 把字体值（单个字体名 / 逗号分隔的字体栈）组装成合法的 CSS font-family 列表
+  function tellFamily(f) {
+    f = (f || "").trim();
+    if (!f) return "";
+    if (/^["'].*["']$/.test(f)) return f;
+    if (/[\s]/.test(f)) return '"' + f + '"';
+    return f;
+  }
+  function buildFontStack(value) {
+    if (!value) return SYSTEM_FONT_STACK;
+    var parts = String(value).split(",").map(tellFamily).filter(function (t) { return t; });
+    parts.push(SYSTEM_FONT_STACK);
+    return parts.join(", ");
+  }
   function applySettings() {
-    var stack = state.fontFamily ? '"' + state.fontFamily + '", ' : "";
-    stack += SYSTEM_FONT_STACK;
-    document.documentElement.style.setProperty("--font", stack);
+    document.documentElement.style.setProperty("--font", buildFontStack(state.fontFamily));
     document.documentElement.style.setProperty("--editor-fs", (state.fontSize || 16) + "px");
   }
 
   function fillFontSelect(fonts) {
     if (!el.fontSelect) return;
+    // 清洗字体列表：去掉极长 / 含不可打印或符号字符的族名（这些在默认 UI 字体里会显示成方块「乱码」）
+    function looksOk(f) {
+      if (!f || f.length > 48) return false;
+      for (var i = 0; i < f.length; i++) {
+        var c = f.charCodeAt(i);
+        var printable = (c >= 0x20 && c <= 0x7e) || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3000 && c <= 0x30ff) || (c >= 0x3400 && c <= 0x4dbf);
+        if (!printable) return false;
+      }
+      return true;
+    }
+    var clean = (fonts || []).filter(looksOk);
     el.fontSelect.innerHTML = "";
     var def = document.createElement("option");
     def.value = "";
     def.textContent = "默认（跟随系统）";
     el.fontSelect.appendChild(def);
-    fonts.forEach(function (f) {
+    clean.forEach(function (f) {
       var o = document.createElement("option");
       o.value = f;
       o.textContent = f;
+      try { o.style.fontFamily = f; } catch (e) {} // 用字体自身预览，所见即所得
       el.fontSelect.appendChild(o);
     });
     // 当前选中的字体若不在列表里（自定义），补一个选项防止显示错位
@@ -933,6 +958,7 @@
         var o2 = document.createElement("option");
         o2.value = state.fontFamily;
         o2.textContent = state.fontFamily + "（自定义）";
+        try { o2.style.fontFamily = state.fontFamily; } catch (e) {}
         el.fontSelect.appendChild(o2);
       }
     }
@@ -1200,6 +1226,15 @@
       changed = mergeNotes(res.notes);
       if (changed) filterPurged(); // 服务端若仍保留已永久删除的笔记，本地用墓碑过滤掉
     }
+    // 跨端墓碑：其他设备永久删除的笔记，本地也清掉，保持回收站一致
+    if (res && res.removed && res.removed.length) {
+      var removedSet = {};
+      res.removed.forEach(function (id) { removedSet[id] = true; if (state.purged.indexOf(id) === -1) state.purged.push(id); });
+      store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+      var before = state.notes.length;
+      state.notes = state.notes.filter(function (n) { return !removedSet[n.id]; });
+      if (state.notes.length !== before) { changed = true; saveLocalOnly(); }
+    }
     if (res && typeof res.serverTime === "number" && res.serverTime > 0) {
       state.since = res.serverTime;
       store.setItem(SINCE_KEY, String(state.since));
@@ -1290,6 +1325,12 @@
     store.setItem(SINCE_KEY, "0");
     store.setItem(PUSHED_KEY, "{}");
     store.setItem(TOTAL_KEY, "0");
+  }
+  // 把永久删除上报到服务端（记入墓碑），让其他设备也清掉
+  function purgeOnServer(ids) {
+    if (!state.token || !ids || !ids.length) return;
+    api("/api/notes/purge", { method: "POST", body: JSON.stringify({ ids: ids }) })
+      .catch(function () { /* 失败不阻塞本地删除 */ });
   }
 
   /* ---------------- WebDAV 导出 ---------------- */

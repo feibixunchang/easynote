@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>简易笔记 · 用 Xcode 把 iOS 版装到 iPhone（截图级教程）</title>
+<style>
+  :root{
+    --bg:#0d1117; --card:#161b22; --card2:#1c2330; --line:#2a3340;
+    --txt:#e6edf3; --sub:#9aa7b4; --blue:#2f81f7; --blue2:#1f6feb;
+    --green:#3fb950; --red:#f85149; --yellow:#d29922; --purple:#a371f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+    line-height:1.7;padding:0 0 80px}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 20px}
+  h1{font-size:26px;margin:0 0 6px}
+  .lead{color:var(--sub);font-size:15px;margin:0 0 22px}
+  .badge{display:inline-block;background:var(--blue2);color:#fff;font-size:12px;
+    padding:3px 10px;border-radius:20px;margin-right:8px;vertical-align:middle}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:22px 22px 18px;margin:18px 0;position:relative;overflow:hidden}
+  .step h2{font-size:18px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  .num{width:28px;height:28px;border-radius:50%;background:var(--blue);color:#fff;
+    display:inline-flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;flex:0 0 auto}
+  .step p{margin:10px 0;color:#cdd6e0}
+  .note{background:var(--card2);border-left:3px solid var(--yellow);padding:10px 14px;
+    border-radius:8px;font-size:14px;color:#e9d8a6;margin:12px 0}
+  .note.green{border-left-color:var(--green);color:#a7e8b4}
+  .note.red{border-left-color:var(--red);color:#f4b3ae}
+  .note.blue{border-left-color:var(--blue);color:#bcd6ff}
+  code{background:#0b0f14;border:1px solid var(--line);padding:1px 7px;border-radius:6px;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;color:#ffd9a0}
+  ul{margin:8px 0;padding-left:22px}
+  li{margin:5px 0;color:#cdd6e0}
+
+  /* Xcode 窗口 mock */
+  .xcwin{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:14px 0;
+    box-shadow:0 6px 22px rgba(0,0,0,.35);background:#1e1e1e}
+  .xcbar{height:34px;background:#2d2d2d;display:flex;align-items:center;padding:0 12px;gap:8px}
+  .dot{width:12px;height:12px;border-radius:50%}
+  .r{background:#ff5f56}.y{background:#ffbd2e}.g{background:#27c93f}
+  .xctitle{color:#cfcfcf;font-size:12px;margin-left:8px}
+  .xcbody{display:flex;min-height:200px}
+  .xcside{width:190px;background:#252526;border-right:1px solid #333;padding:10px;font-size:12.5px}
+  .xcside .nav{color:#9aa7b4;padding:3px 6px;border-radius:5px}
+  .xcside .nav.act{background:#094771;color:#fff}
+  .xcside .grp{margin:10px 0 4px;color:#7d8b99;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  .xcmain{flex:1;padding:14px 16px;font-size:13px;color:#d6d6d6}
+  .row{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:6px;margin:2px 0}
+  .row:hover{background:#2a2a2a}
+  .row .k{color:#9aa7b4;width:150px;flex:0 0 auto}
+  .row .v{color:#fff;background:#0d0d0d;border:1px solid #3a3a3a;border-radius:5px;
+    padding:3px 8px;flex:1}
+  .row .v.sel{background:#094771;border-color:#1f6feb}
+  .btn{background:var(--blue2);color:#fff;border:none;padding:6px 16px;border-radius:7px;
+    font-size:13px;font-weight:600;cursor:default;display:inline-block}
+  .btn.sm{padding:4px 12px;font-size:12px}
+  .pill{display:inline-block;background:#3a3f47;color:#cfd6dd;font-size:12px;
+    padding:3px 10px;border-radius:20px;margin:3px 4px 0 0}
+  .pill.ok{background:#1b4332;color:#7ee2a8}
+  .pill.warn{background:#4a3b12;color:#f0c66b}
+
+  /* iPhone mock */
+  .phone{width:230px;border:8px solid #111;border-radius:34px;background:#000;
+    margin:14px auto;padding:6px;position:relative}
+  .phone .screen{background:linear-gradient(160deg,#1b2735,#0d1117);border-radius:24px;
+    padding:26px 16px 18px;min-height:300px;color:#e6edf3;font-size:12.5px}
+  .phone .notch{position:absolute;top:6px;left:50%;transform:translateX(-50%);
+    width:70px;height:16px;background:#111;border-radius:0 0 12px 12px}
+  .phone .icon{width:54px;height:54px;border-radius:13px;margin:0 auto 6px;
+    background:linear-gradient(145deg,#2f81f7,#1f4fd6);display:flex;align-items:center;
+    justify-content:center;font-size:24px}
+  .phone .label{text-align:center;font-size:12px;margin-top:2px}
+
+  .done{text-align:center;font-size:18px;color:var(--green);margin:24px 0 6px}
+  .footer{color:var(--sub);font-size:13px;text-align:center;margin-top:30px}
+  a{color:var(--blue)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>用 Xcode 把「简易笔记」iOS 版装到 iPhone</h1>
+  <p class="lead"><span class="badge">备用方案</span>Sideloadly 的 -22406 在新系统上握手不稳，改用苹果官方的 Xcode 签名通道——原生、最稳，免费 Apple ID 即可。</p>
+
+  <div class="note blue">
+    <b>开始前先说清：</b>Xcode 体积约 <b>15 GB</b>，第一次下载很慢，建议挂机。装好后签名安装只是点几下。整个过程<b>不需要越狱</b>，免费账号签名有效期 <b>7 天</b>（到期重连 Xcode 点一次 Run 即可续）。
+  </div>
+
+  <!-- 1 -->
+  <div class="step">
+    <h2><span class="num">1</span>安装 Xcode（约 15GB）</h2>
+    <p>我已经在 App Store 里帮你打开了 Xcode 页面。如果没跳出来，自己打开 App Store 搜 <code>Xcode</code>。</p>
+    <div class="xcwin">
+      <div class="xcbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="xctitle">App Store — Xcode</span></div>
+      <div class="xcbody">
+        <div class="xcside">
+          <div class="grp">搜索</div>
+          <div class="nav act">Xcode</div>
+          <div class="grp">开发者工具</div>
+          <div class="nav">下载中… 62%</div>
+        </div>
+        <div class="xcmain">
+          <div class="row"><span class="k">名称</span><span class="v">Xcode</span></div>
+          <div class="row"><span class="k">大小</span><span class="v">≈ 15 GB</span></div>
+          <div class="row"><span class="k">操作</span><span class="v sel">点「获取 / 安装」→ 输入 Apple ID 密码</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="note"><b>耐心等下载完成</b>（进度在 Launchpad 或 App Store「已购」里看）。下完会自动「安装」，可能还要等几分钟解压。</div>
+  </div>
+
+  <!-- 2 -->
+  <div class="step">
+    <h2><span class="num">2</span>首次启动：装组件 + 同意许可</h2>
+    <p>第一次打开 Xcode 会弹两个框，都点同意 / 安装：</p>
+    <ul>
+      <li>弹「Install additional required components?」→ 点 <b>Install</b>，输入开机密码。</li>
+      <li>弹许可协议 → 点 <b>Agree</b>。</li>
+      <li>首次还会让你选「Platforms」，确保 <b>iOS</b> 勾上（默认就有）。</li>
+    </ul>
+    <div class="note">这一步会再装几个 GB 的 iOS 模拟器/设备支持组件，同样等它跑完。</div>
+  </div>
+
+  <!-- 3 -->
+  <div class="step">
+    <h2><span class="num">3</span>打开工程</h2>
+    <p>在你 Mac 上打开终端，运行下面任意一条（工程已经在仓库里了）：</p>
+    <p><code>open /home/user/WorkBuddy/2026-10-17-21-34-18/easynote/mobile/ios/App/App.xcodeproj</code></p>
+    <p>或者 Finder 里进到 <code>easynote/mobile/ios/App/</code>，双击 <code>App.xcodeproj</code>。Xcode 打开后左侧导航应看到 <b>App</b> 工程。</p>
+    <div class="note green">工程已为你配好：自动签名、Bundle ID <code>com.feibixunchang.easynote</code>、版本 1.0.0、共享 scheme 已建。<b>不需要你改任何构建设置。</b></div>
+  </div>
+
+  <!-- 4 -->
+  <div class="step">
+    <h2><span class="num">4</span>登录你的 Apple ID</h2>
+    <p>菜单栏：<b>Xcode → Settings…（或 Preferences）</b> → 切到 <b>Accounts</b> 标签页 → 左下角 <b>+</b> → 选 <b>Apple ID</b> → 登录 <code>your-apple-id@example.com</code>（用你平时那个密码，不是应用专用密码）。</p>
+    <div class="note blue"><b>找不到 Settings？看这里：</b>它是<b>屏幕最上方那一行菜单栏里、最左边的「Xcode」菜单</b>（带 Xcode 图标的那个，不是 File/Edit/View）。点开后往下拉，在「Quit Xcode」上方就是 <b>Settings…</b>。进去后顶部一排标签里点 <b>Accounts</b>。</div>
+    <div class="xcwin">
+      <div class="xcbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="xctitle">Xcode ▸ Settings ▸ Accounts</span></div>
+      <div class="xcbody">
+        <div class="xcside">
+          <div class="grp">Apple IDs</div>
+          <div class="nav act">your-apple-id@example.com</div>
+          <div class="grp">团队</div>
+          <div class="nav">Personal Team（免费）</div>
+        </div>
+        <div class="xcmain">
+          <div class="row"><span class="k">Apple ID</span><span class="v">your-apple-id@example.com</span></div>
+          <div class="row"><span class="k">团队</span><span class="v sel">你的名字 (Personal Team)</span></div>
+          <div class="row"><span class="k">状态</span><span class="v">已验证 ✓</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="note">免费账号在这里会显示为「<b>Personal Team</b>」或「你的名字 (Personal Team)」，这是正常的，就用它。</div>
+  </div>
+
+  <!-- 5 -->
+  <div class="step">
+    <h2><span class="num">5</span>选签名团队</h2>
+    <p>左侧选中 <b>TARGETS → App</b> → 右侧切到 <b>Signing & Capabilities</b>：</p>
+    <ul>
+      <li>✅ 勾选 <b>Automatically manage signing</b>（已默认勾好）</li>
+      <li><b>Team</b> 下拉选你刚登录的 <b>Personal Team</b></li>
+      <li>下方若出现红色报错「Failed to register bundle identifier」→ 把 Bundle Identifier 改成你独有的，比如 <code>com.example.easynote</code> 再重试（极少发生）。</li>
+    </ul>
+    <div class="xcwin">
+      <div class="xcbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="xctitle">App ▸ Signing & Capabilities</span></div>
+      <div class="xcbody">
+        <div class="xcmain" style="flex:1">
+          <div class="row"><span class="k">Automatically manage</span><span class="v sel">✓ 已勾选</span></div>
+          <div class="row"><span class="k">Team</span><span class="v sel">你的名字 (Personal Team)</span></div>
+          <div class="row"><span class="k">Bundle ID</span><span class="v">com.feibixunchang.easynote</span></div>
+          <div class="row"><span class="k">Signing Certificate</span><span class="v">Apple Development ✓</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6 -->
+  <div class="step">
+    <h2><span class="num">6</span>iPhone 上开启「开发者模式」（iOS 16+ 必须）</h2>
+    <p>这一步很多人漏掉，漏了会卡在「无法运行」。在 iPhone 上：</p>
+    <p><b>设置 → 隐私与安全性 → 开发者模式</b> → 打开 → 按提示重启 iPhone。</p>
+    <div class="note red"><b>如果没看到「开发者模式」选项：</b>先把 iPhone 连上 Mac 并让 Xcode 识别一次（下一步），选项通常就会出现；或者先在 Xcode 里跑一次，它也会提示你开。</div>
+  </div>
+
+  <!-- 7 -->
+  <div class="step">
+    <h2><span class="num">7</span>连手机 + 运行（Cmd+R）</h2>
+    <p>iPhone 已经信任过这台 Mac，直接连上。Xcode 顶部工具栏「设备选择器」（▶ 旁边）选你的 <b>iPhone</b>。然后按 <code>⌘ R</code>（或点左上角 ▶ 运行）。</p>
+    <div class="xcwin">
+      <div class="xcbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="xctitle">App — 我的iPhone (iOS 27.2)</span></div>
+      <div class="xcbody">
+        <div class="xcmain" style="flex:1">
+          <div class="row"><span class="k">设备</span><span class="v sel">我的iPhone ▾</span></div>
+          <div class="row"><span class="k">操作</span><span class="btn sm">▶ Run (⌘R)</span></div>
+          <div class="row"><span class="k">状态</span><span class="v">Building… → Signing → Installing → Running ✓</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="note">第一次会卡在「Signing」十几秒——Xcode 在自动帮你生成开发证书 + 描述文件，属正常。之后出现黑屏跑起 WebView 就成功了。</div>
+  </div>
+
+  <!-- 8 -->
+  <div class="step">
+    <h2><span class="num">8</span>手机上信任开发者</h2>
+    <p>装完第一次打开会提示「未受信任的企业级开发者」。去：</p>
+    <p><b>设置 → 通用 → VPN 与设备管理 → 开发者 App → 信任「你的 Apple ID」</b></p>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="screen">
+        <div class="icon">📝</div>
+        <div class="label">简易笔记</div>
+        <p style="text-align:center;color:#9aa7b4;margin-top:14px">设置 → 通用 → VPN与设备管理<br>→ 信任开发者</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9 -->
+  <div class="step">
+    <h2><span class="num">9</span>打开「简易笔记」🎉</h2>
+    <p>回 iPhone 主屏，点 <b>简易笔记</b> 图标即可使用。桌面端/手机端用同一个同步账号，笔记会自动打通。</p>
+    <div class="done">✅ 安装完成</div>
+  </div>
+
+  <!-- 续期 -->
+  <div class="step">
+    <h2><span class="num">↻</span>7 天后续签（免费账号必做）</h2>
+    <p>免费签名 7 天后 App 会打不开（图标还在但点开闪退）。续签只需：</p>
+    <ul>
+      <li>iPhone 连上 Mac，Xcode 打开本工程 → <code>⌘ R</code> 重新跑一次。</li>
+      <li>或装了 Xcode 后顺手开「Settings → Accounts」里保持登录，连上重跑即可。</li>
+    </ul>
+    <div class="note">想彻底免续签只能入 <b>付费 $99/年 的 Apple Developer Program</b>，普通用户 7 天续一次完全够用。</div>
+  </div>
+
+  <!-- 排错 -->
+  <div class="step">
+    <h2><span class="num">!</span>常见报错速查</h2>
+    <ul>
+      <li><b>「Failed to register bundle identifier」</b>：Bundle ID 被占，改成你独有的（如 <code>com.example.easynote</code>），回到第 5 步重选 Team。</li>
+      <li><b>「Could not launch — not trusted」</b>：没做第 8 步，去设置信任开发者。</li>
+      <li><b>「iPhone is busy / 准备设备」</b>：第一次连等几十秒，或重启 Xcode / 重插线。</li>
+      <li><b>「Developer Mode not enabled」</b>：做第 6 步，iPhone 开开发者模式并重启。</li>
+      <li><b>「No signing certificate」</b>：第 4 步 Apple ID 没登录成功，或网络被墙导致苹果服务器连不上（挂代理再试）。</li>
+      <li><b>真机跑起来白屏</b>：前端资源没进包。本工程已构建好 <code>mobile/www</code>，正常不会出现；若你改过代码，先在 <code>mobile</code> 目录跑 <code>npm run build</code> 再开 Xcode。</li>
+    </ul>
+  </div>
+
+  <p class="footer">本教程对应工程：<code>easynote/mobile/ios/App/App.xcodeproj</code> · 版本 1.0.0 · 自动签名已配好</p>
+</div>
+</body>
+</html>

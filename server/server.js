@@ -53,6 +53,29 @@ function loadNotes(u) {
 function saveNotes(u, obj) {
   fs.writeFileSync(userNotesFile(u), JSON.stringify(obj));
 }
+// 墓碑（已永久删除的笔记 ID）：跨端传播，防止其他设备把已被永久删除的笔记重新拉回来。
+// 单独存一个文件，避免与 notes 对象混淆。
+function userTombFile(u) {
+  return path.join(NOTES_DIR, u + ".tomb.json");
+}
+function loadTombstones(u) {
+  try {
+    var t = JSON.parse(fs.readFileSync(userTombFile(u), "utf8")) || {};
+    if (typeof t !== "object" || Array.isArray(t)) return {};
+    return t;
+  } catch (e) { return {}; }
+}
+function saveTombstones(u, obj) {
+  fs.writeFileSync(userTombFile(u), JSON.stringify(obj));
+}
+// 增量返回：游标之后新增/更新的墓碑 ID
+function tombsSince(tombs, since) {
+  var ids = [];
+  Object.keys(tombs).forEach(function (id) {
+    if ((tombs[id] || 0) > since) ids.push(id);
+  });
+  return ids;
+}
 
 // 鉴权中间件：校验 Bearer Token
 function auth(req, res, next) {
@@ -135,7 +158,28 @@ app.get("/api/notes", auth, (req, res) => {
   var notes = loadNotes(req.user);
   var all = Object.keys(notes).map((k) => notes[k]);
   var list = since > 0 ? changedSince(all, since) : all;
-  res.json({ notes: list, serverTime: Date.now(), total: all.length });
+  var tombs = loadTombstones(req.user);
+  var removed = since > 0 ? tombsSince(tombs, since) : Object.keys(tombs);
+  res.json({ notes: list, removed: removed, serverTime: Date.now(), total: all.length });
+});
+
+// 永久删除：客户端把要彻底删除的笔记 ID 上报，服务端删除笔记并记入墓碑。
+// 其他设备下一次同步会收到 removed，从而把已被永久删除的笔记从本地清掉（跨端一致）。
+app.post("/api/notes/purge", auth, (req, res) => {
+  const ids = (req.body && req.body.ids) || [];
+  if (!Array.isArray(ids) || !ids.length) return res.json({ ok: true, removed: [] });
+  const store = loadNotes(req.user);
+  const tombs = loadTombstones(req.user);
+  const now = Date.now();
+  var changed = false;
+  ids.forEach((id) => {
+    if (!id) return;
+    if (store[id]) { delete store[id]; changed = true; }
+    tombs[id] = now; // 记入墓碑（含时间戳，供增量同步）
+  });
+  if (changed) saveNotes(req.user, store);
+  saveTombstones(req.user, tombs);
+  res.json({ ok: true, removed: ids });
 });
 
 // 同步（推送 + 合并 + 返回增量或完整集合，按 modifiedDate 后写覆盖）。
@@ -144,6 +188,7 @@ app.post("/api/notes/sync", auth, (req, res) => {
   const incoming = (req.body && req.body.notes) || [];
   const since = parseInt(req.body && req.body.since, 10) || 0;
   const store = loadNotes(req.user);
+  const tombs = loadTombstones(req.user);
   var changed = false;
   incoming.forEach((n) => {
     if (!n || !n.id) return;
@@ -152,13 +197,32 @@ app.post("/api/notes/sync", auth, (req, res) => {
       n.storedAt = Date.now(); // 服务端入库时间：增量游标以此为基准
       store[n.id] = n;
       changed = true;
+      if (tombs[n.id]) { delete tombs[n.id]; } // 重新创建/恢复的同 ID 笔记，撤销墓碑
     }
   });
-  if (changed) saveNotes(req.user, store); // 没有实际变更则不重写文件（客户端每 3 秒轮询一次）
+  if (changed) saveNotes(req.user, store);
+  if (changed || Object.keys(tombs).length) {
+    // 仅在确实改动时重写墓碑（减少无谓写入）；但上面若删了墓碑需保存
+    if (tombsDirty(tombs, req.user)) saveTombstones(req.user, tombs);
+  }
   var all = Object.keys(store).map((k) => store[k]);
   var list = since > 0 ? changedSince(all, since) : all;
-  res.json({ notes: list, serverTime: Date.now(), total: all.length });
+  var removed = since > 0 ? tombsSince(tombs, since) : Object.keys(tombs);
+  res.json({ notes: list, removed: removed, serverTime: Date.now(), total: all.length });
 });
+
+// 判断墓碑是否相比磁盘发生变化（避免每次轮询都写盘）
+function tombsDirty(tombs, u) {
+  try {
+    var onDisk = loadTombstones(u);
+    var ak = Object.keys(tombs), bk = Object.keys(onDisk);
+    if (ak.length !== bk.length) return true;
+    for (var i = 0; i < ak.length; i++) {
+      if (!(ak[i] in onDisk) || onDisk[ak[i]] !== tombs[ak[i]]) return true;
+    }
+    return false;
+  } catch (e) { return true; }
+}
 
 // 统一错误输出为 JSON：否则 body-parser 的 413 会返回 HTML 错误页，
 // 客户端只能显示「服务器返回错误 (413)」，用户看不懂该怎么处理。
