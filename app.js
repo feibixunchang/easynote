@@ -310,6 +310,11 @@
     el.infoModal = document.getElementById("infoModal");
     el.infoBody = document.getElementById("infoBody");
     el.infoClose = document.getElementById("infoClose");
+    el.linkModal = document.getElementById("linkModal");
+    el.linkUrl = document.getElementById("linkUrl");
+    el.linkText = document.getElementById("linkText");
+    el.linkConfirm = document.getElementById("linkConfirm");
+    el.linkCancel = document.getElementById("linkCancel");
     el.navSettings = document.getElementById("navSettings");
     el.settingsModal = document.getElementById("settingsModal");
     el.settingsClose = document.getElementById("settingsClose");
@@ -781,13 +786,25 @@
       if (img) {
         e.preventDefault();
         var src = img.getAttribute("src");
-        if (src) openExternal(src);
+        // 内嵌的 data: 图片无需用外部程序打开
+        if (src && !/^data:/i.test(src)) openExternal(src);
       }
     });
 
     el.settingsClose.addEventListener("click", function () { el.settingsModal.hidden = true; });
     el.settingsModal.addEventListener("click", function (e) {
       if (e.target === el.settingsModal) el.settingsModal.hidden = true;
+    });
+    if (el.linkConfirm) el.linkConfirm.addEventListener("click", confirmLink);
+    if (el.linkCancel) el.linkCancel.addEventListener("click", closeLinkModal);
+    if (el.linkModal) el.linkModal.addEventListener("click", function (e) {
+      if (e.target === el.linkModal) closeLinkModal();
+    });
+    if (el.linkUrl) el.linkUrl.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); confirmLink(); }
+    });
+    if (el.linkText) el.linkText.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); confirmLink(); }
     });
     if (el.themeModeSelect) {
       el.themeModeSelect.addEventListener("change", function () {
@@ -818,6 +835,7 @@
         createNote();
       }
       if (e.key === "Escape" && !el.infoModal.hidden) el.infoModal.hidden = true;
+      if (e.key === "Escape" && el.linkModal && !el.linkModal.hidden) closeLinkModal();
     });
   }
 
@@ -1292,35 +1310,55 @@
     if (!note || note.deleted) return;
     var api = window.electronAPI;
     if (!api || !api.pickImage) { toast("当前环境不支持选择图片"); return; }
-    api.pickImage().then(function (p) {
-      if (!p) return;
-      var name = String(p).split(/[\\/]/).pop() || "图片";
-      var url = fileUrl(p);
-      var md = "\n![" + name + "](" + url + ")\n";
+    api.pickImage().then(function (r) {
+      if (!r) return;
+      var name = r.name || "图片";
+      // 以 data: URI 内嵌，预览时不受 file:// 跨目录限制，三端均可显示
+      var md = "\n![" + name + "](" + r.dataUrl + ")\n";
       insertAtCursor(el.editor, md);
       triggerInput(el.editor);
-      toast("已插入图片（Markdown 预览模式下可见，点击可外部打开）");
+      // 图片需 Markdown + 预览才能显示：自动开启本笔记的 Markdown（启用 👁 预览按钮）
+      if (!note.markdown) { note.markdown = true; save(); setToolbar(note); }
+      toast("已插入图片，点 👁 预览查看（图片已内嵌保存）");
     }).catch(function () { toast("插入图片失败"); });
   }
 
+  // 插入链接：用自定义弹窗（window.prompt 在 Electron 打包环境会被静默拦截）
   function insertLink() {
-    var ta = el.editor;
     var note = currentNote();
     if (!note || note.deleted) return;
+    var ta = el.editor;
     var sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
-    var url = window.prompt("输入链接地址（https://…）", "https://");
-    if (url == null) return;
-    url = url.trim();
-    if (!url) { toast("链接地址不能为空"); return; }
-    var text = sel;
-    if (!text) {
-      text = window.prompt("显示文字（留空则使用链接地址）", url);
-      if (text == null) return;
+    el._linkSel = sel;
+    el.linkUrl.value = "https://";
+    el.linkText.value = sel || "";
+    el.linkModal.hidden = false;
+    el.linkUrl.focus();
+    el.linkUrl.select();
+  }
+  function confirmLink() {
+    var url = (el.linkUrl.value || "").trim();
+    if (!url) { toast("链接地址不能为空"); el.linkUrl.focus(); return; }
+    var text = (el.linkText.value || "").trim() || url;
+    var ta = el.editor;
+    var md = "[" + text + "](" + url + ")";
+    if (el._linkSel) {
+      // 替换当前选中文字
+      var start = ta.selectionStart, end = ta.selectionEnd, val = ta.value;
+      ta.value = val.slice(0, start) + md + val.slice(end);
+      ta.selectionStart = ta.selectionEnd = start + md.length;
+    } else {
+      insertAtCursor(ta, md);
     }
-    var md = "[" + (text || url) + "](" + url + ")";
-    insertAtCursor(ta, md);
     triggerInput(ta);
-    toast("已插入链接（预览 / 点击可打开）");
+    el.linkModal.hidden = true;
+    // 链接需 Markdown + 预览才能渲染：自动开启本笔记的 Markdown
+    var note = currentNote();
+    if (note && !note.markdown) { note.markdown = true; save(); setToolbar(note); }
+    toast("已插入链接（点 👁 预览 / 点击可打开）");
+  }
+  function closeLinkModal() {
+    el.linkModal.hidden = true;
   }
 
   function formatDateTime(d) {

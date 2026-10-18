@@ -360,7 +360,23 @@ ipcMain.handle("get-clipboard-text", function () {
   }
 });
 
-// 弹出系统文件选择框，挑选要插入的图片，返回绝对路径（取消则返回 null）
+// 无法被 nativeImage 解码时，按扩展名猜测 MIME
+const MIME_BY_EXT = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".svg": "image/svg+xml",
+  ".heic": "image/heic",
+};
+
+// 弹出系统文件选择框，挑选要插入的图片，返回 { name, dataUrl }（取消则返回 null）
+// dataUrl 为内嵌 base64（data:image/...;base64,...）：
+//  ① 预览时不受 Chromium 对 file:// 跨目录访问的限制，三端都能正常显示；
+//  ② 图片随笔记一起保存，原文件被移动 / 删除也不影响显示。
+// 过大的图片会等比缩小（最长边 ≤ 1600px），控制笔记体积。
 ipcMain.handle("pick-image", function () {
   if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve(null);
   return dialog
@@ -373,7 +389,28 @@ ipcMain.handle("pick-image", function () {
     })
     .then(function (res) {
       if (res.canceled || !res.filePaths || !res.filePaths.length) return null;
-      return res.filePaths[0];
+      const p = res.filePaths[0];
+      try {
+        const buf = fs.readFileSync(p);
+        const name = path.basename(p);
+        let img = nativeImage.createFromBuffer(buf);
+        if (img.isEmpty()) {
+          // 个别格式（如 heic）nativeImage 解码失败，直接以原始字节内嵌
+          const mime = MIME_BY_EXT[path.extname(p).toLowerCase()] || "image/png";
+          return { name: name, dataUrl: "data:" + mime + ";base64," + buf.toString("base64") };
+        }
+        // 过大则等比缩小，控制笔记体积（最长边 ≤ 1600px）
+        const s = img.getSize();
+        const MAX = 1600;
+        const longest = Math.max(s.width, s.height);
+        if (longest > MAX) {
+          const f = MAX / longest;
+          img = img.resize({ width: Math.round(s.width * f), height: Math.round(s.height * f) });
+        }
+        return { name: name, dataUrl: img.toDataURL() };
+      } catch (e) {
+        return null;
+      }
     })
     .catch(function () {
       return null;

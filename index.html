@@ -192,6 +192,26 @@
 
   <input type="file" id="importFile" accept=".json" hidden />
 
+  <!-- 插入链接弹窗 -->
+  <div class="modal" id="linkModal" hidden>
+    <div class="modal-box">
+      <h3>插入链接</h3>
+      <div class="setting-row">
+        <label>链接地址</label>
+        <input id="linkUrl" type="text" placeholder="https://… 在此粘贴链接" />
+      </div>
+      <div class="setting-row">
+        <label>显示文字</label>
+        <input id="linkText" type="text" placeholder="留空则使用链接地址" />
+      </div>
+      <p class="modal-sub">支持网页、本地文件（file://）等任意链接；选中文字后插入可将其变为链接。</p>
+      <div class="modal-actions">
+        <button id="linkCancel">取消</button>
+        <button id="linkConfirm" class="primary">插入</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>
