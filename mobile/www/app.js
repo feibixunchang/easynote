@@ -23,7 +23,7 @@
   var TOTAL_KEY = "simplenote_zh_total";
   var DAV_KEY = "simplenote_zh_webdav";
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.1";
+  var APP_VERSION = "1.0.2";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -200,14 +200,21 @@
     // 同步挂到 html（:root）与 body：html 的背景负责绘制刘海/状态栏那一行
     document.body.classList.toggle("dark", dark);
     document.documentElement.classList.toggle("dark", dark);
+    // 主题色：与 CSS 的 --bg 保持一致（浅色 #ffffff / 深色 #101216）
     var meta = document.getElementById("themeColorMeta");
-    if (meta) meta.setAttribute("content", dark ? "#101216" : "#f5f6f8");
+    if (meta) meta.setAttribute("content", dark ? "#101216" : "#ffffff");
     // 同步原生状态栏（深色模式用浅色文字）
     var sb = plugin("StatusBar");
     if (sb && sb.setStyle) {
       try {
+        // 关键：让 WebView 延伸到状态栏之下。延伸后，「时间 / 信号 / WiFi / 电量」
+        // 那一行的底色由页面自己的 .appbar（带 env(safe-area-inset-top) 内边距、
+        // 背景为 --bg）来画，因此永远和主页面同色。
+        // 反之若不延伸，那一行是系统/容器绘制的，CSS 再怎么改都压不动 → 出现灰条。
+        if (sb.setOverlaysWebView) sb.setOverlaysWebView({ overlay: true });
         sb.setStyle({ style: dark ? "DARK" : "LIGHT" });
-        sb.setBackgroundColor({ color: dark ? "#101216" : "#f5f6f8" });
+        // 兜底：个别机型 overlay 未生效时，让原生底色也跟随主题，避免出现色差
+        sb.setBackgroundColor({ color: dark ? "#101216" : "#ffffff" });
       } catch (e) {}
     }
   }
@@ -396,6 +403,12 @@
     el.accName = document.getElementById("accName");
     el.syncStatus = document.getElementById("syncStatus");
     el.btnEmptyTrash = document.getElementById("btnEmptyTrash");
+    el.appbarTitle = document.getElementById("appbarTitle");
+    el.btnDrawer = document.getElementById("btnDrawer");
+    el.drawer = document.getElementById("drawer");
+    el.drawerMask = document.getElementById("drawerMask");
+    el.drawerCountNotes = document.getElementById("drawerCountNotes");
+    el.drawerCountTrash = document.getElementById("drawerCountTrash");
     el.themeModeSelect = document.getElementById("themeModeSelect");
     el.fontSelect = document.getElementById("fontSelect");
     el.fontCustom = document.getElementById("fontCustom");
@@ -649,6 +662,11 @@
     document.body.setAttribute("data-view", state.view);
     el.listTitle.textContent = state.view === "trash" ? "回收站" :
       (state.activeTag ? "#" + state.activeTag : "全部笔记");
+    // 顶栏标题跟随当前列表（Simplenote 那样一眼看清在哪个列表里）
+    if (el.appbarTitle) {
+      el.appbarTitle.textContent = state.view === "trash" ? "回收站" :
+        (state.activeTag ? "#" + state.activeTag : "笔记");
+    }
     el.btnTheme.textContent = state.dark ? "☀" : "🌙";
     // 回收站视图且有内容时显示「清空回收站」
     if (el.btnEmptyTrash) {
@@ -656,6 +674,7 @@
       el.btnEmptyTrash.hidden = !trashed;
     }
     renderTags();
+    updateDrawer();
     var list = getNotes();
     var cur = currentNote();
     if (!cur || !!cur.deleted !== (state.view === "trash")) {
@@ -664,16 +683,22 @@
     renderList();
     renderEditor();
   }
-  // 切换底部导航时只刷新列表相关 UI（避免每次全量 renderAll 造成的卡顿 / 生硬）
+  // 切换视图时只刷新列表相关 UI（避免每次全量 renderAll 造成的卡顿 / 生硬）
   function refreshListView() {
     document.body.setAttribute("data-view", state.view);
     el.listTitle.textContent = state.view === "trash" ? "回收站" :
       (state.activeTag ? "#" + state.activeTag : "全部笔记");
+    // 顶栏标题跟随当前列表（Simplenote 那样一眼看清在哪个列表里）
+    if (el.appbarTitle) {
+      el.appbarTitle.textContent = state.view === "trash" ? "回收站" :
+        (state.activeTag ? "#" + state.activeTag : "笔记");
+    }
     el.btnTheme.textContent = state.dark ? "☀" : "🌙";
     if (el.btnEmptyTrash) {
       var trashed = state.view === "trash" && getNotes().length > 0;
       el.btnEmptyTrash.hidden = !trashed;
     }
+    updateDrawer();
     var list = getNotes();
     var cur = currentNote();
     if (!cur || !!cur.deleted !== (state.view === "trash")) {
@@ -706,6 +731,42 @@
     else renderAll();
   }
 
+  /* ---------------- 侧边抽屉菜单（Simplenote 风格） ----------------
+   * 笔记 / 回收站 / 设置 收在二级菜单里，主页面只有搜索栏 + 列表 + 新建按钮。 */
+  function updateDrawer() {
+    if (!el.drawer) return;
+    var items = el.drawer.querySelectorAll(".drawer-item");
+    var onSettings = document.body.getAttribute("data-screen") === "settings";
+    var target = onSettings ? "settings" : (state.view === "trash" ? "trash" : "notes");
+    for (var i = 0; i < items.length; i++) {
+      items[i].classList.toggle("active", items[i].getAttribute("data-view") === target);
+    }
+    // 数量小徽标：笔记为未删除条数，回收站为已删除条数
+    var allNotes = state.notes || [];
+    var alive = 0, dead = 0;
+    for (var j = 0; j < allNotes.length; j++) {
+      if (allNotes[j] && allNotes[j].deleted) dead++; else alive++;
+    }
+    if (el.drawerCountNotes) el.drawerCountNotes.textContent = alive ? String(alive) : "";
+    if (el.drawerCountTrash) el.drawerCountTrash.textContent = dead ? String(dead) : "";
+  }
+  function openDrawer() {
+    if (!el.drawer) return;
+    updateDrawer();
+    el.drawer.hidden = false;
+    if (el.drawerMask) el.drawerMask.hidden = false;
+    // 下一帧再加 class，才会有滑入动画
+    requestAnimationFrame(function () { el.drawer.classList.add("show"); });
+  }
+  function closeDrawer() {
+    if (!el.drawer) return;
+    el.drawer.classList.remove("show");
+    if (el.drawerMask) el.drawerMask.hidden = true;
+    setTimeout(function () {
+      if (el.drawer && !el.drawer.classList.contains("show")) el.drawer.hidden = true;
+    }, 220);
+  }
+
   /* ---------------- 行为 ---------------- */
   function selectNote(id) {
     if (isWide()) { state.currentId = id; state.preview = false; renderAll(); return; }
@@ -731,6 +792,14 @@
     setTimeout(function () { el.editor.focus(); }, 30);
   }
 
+  // 弹窗里给笔记一个可读的名字（取首行、去掉 Markdown 符号，最长 24 字）
+  function noteCaption(note) {
+    var first = String((note && note.content) || "").split("\n")[0] || "";
+    var t = first.replace(/^[#>\-\*\s]+/, "").trim();
+    if (!t) return "无标题";
+    return t.length > 24 ? t.slice(0, 24) + "…" : t;
+  }
+
   function handleAction(action, note) {
     switch (action) {
       case "pin":
@@ -744,24 +813,32 @@
       case "share":
         shareNote(note); break;
       case "trash":
-        note.deleted = true; note.deletedDate = Date.now(); note.pinned = false; note.modifiedDate = Date.now();
-        state.currentId = null; save(); renderAll();
-        if (!isWide()) goList();
-        toast("已移到回收站");
+        openConfirm("移到回收站",
+          "「" + noteCaption(note) + "」将被移到回收站，可在回收站里恢复。",
+          function () {
+            note.deleted = true; note.deletedDate = Date.now(); note.pinned = false; note.modifiedDate = Date.now();
+            state.currentId = null; save(); renderAll();
+            if (!isWide()) goList();
+            toast("已移到回收站");
+          });
         break;
       case "restore":
         note.deleted = false; note.deletedDate = null; note.modifiedDate = Date.now(); save(); renderAll();
         toast("已恢复"); break;
       case "purge":
-        if (state.purged.indexOf(note.id) === -1) {
-          state.purged.push(note.id);
-          store.setItem(PURGE_KEY, JSON.stringify(state.purged));
-        }
-        state.notes = state.notes.filter(function (n) { return n.id !== note.id; });
-        if (state.currentId === note.id) state.currentId = null;
-        purgeOnServer([note.id]);
-        save(); renderAll();
-        toast("已永久删除");
+        openConfirm("永久删除",
+          "「" + noteCaption(note) + "」将被永久删除，不可恢复，并同步删除所有设备上的这一条。",
+          function () {
+            if (state.purged.indexOf(note.id) === -1) {
+              state.purged.push(note.id);
+              store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+            }
+            state.notes = state.notes.filter(function (n) { return n.id !== note.id; });
+            if (state.currentId === note.id) state.currentId = null;
+            purgeOnServer([note.id]);
+            save(); renderAll();
+            toast("已永久删除");
+          });
         break;
       case "color":
         openColorSheet(note); break;
@@ -1807,22 +1884,40 @@
 
     el.appVersion.addEventListener("click", function () { checkMobileUpdate(true); });
 
-    // 底部导航
-    var navBtns = document.querySelectorAll(".bottom-nav .nav-btn");
-    for (var i = 0; i < navBtns.length; i++) {
-      (function (btn) {
-        btn.addEventListener("click", function () {
-          var tab = btn.getAttribute("data-tab");
-          for (var j = 0; j < navBtns.length; j++) navBtns[j].classList.remove("active");
-          btn.classList.add("active");
-          if (tab === "trash") { state.view = "trash"; }
-          else if (tab === "settings") { goSettings(); return; }
-          else { state.view = "notes"; }
-          if (document.body.getAttribute("data-screen") === "settings") setScreen("list");
-          refreshListView();
-        });
-      })(navBtns[i]);
+    if (el.btnDrawer) el.btnDrawer.addEventListener("click", openDrawer);
+    if (el.drawerMask) el.drawerMask.addEventListener("click", closeDrawer);
+    if (el.drawer) {
+      var drawerBtns = el.drawer.querySelectorAll(".drawer-item");
+      for (var d = 0; d < drawerBtns.length; d++) {
+        (function (btn) {
+          btn.addEventListener("click", function () {
+            var v = btn.getAttribute("data-view");
+            closeDrawer();
+            if (v === "settings") { goSettings(); return; }
+            state.view = v === "trash" ? "trash" : "notes";
+            state.activeTag = null;
+            if (document.body.getAttribute("data-screen") === "settings") setScreen("list");
+            refreshListView();
+          });
+        })(drawerBtns[d]);
+      }
     }
+    // 从左边缘右滑也能拉出抽屉（与 Simplenote 一致）
+    (function () {
+      var startX = 0, startY = 0, tracking = false;
+      document.addEventListener("touchstart", function (e) {
+        if (!e.touches || !e.touches[0]) return;
+        var t = e.touches[0];
+        if (t.clientX <= 28) { tracking = true; startX = t.clientX; startY = t.clientY; }
+      }, { passive: true });
+      document.addEventListener("touchend", function (e) {
+        if (!tracking) return;
+        tracking = false;
+        var t = e.changedTouches && e.changedTouches[0];
+        if (!t) return;
+        if (t.clientX - startX > 45 && Math.abs(t.clientY - startY) < 40) openDrawer();
+      }, { passive: true });
+    })();
 
     // 清空回收站（本地 + 上报服务端，跨端一致）
     if (el.btnEmptyTrash) {

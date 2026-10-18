@@ -5,9 +5,11 @@
  */
 
 :root {
-  --bg: #f5f6f8;
+  /* 浅色背景与桌面端保持一致（桌面 --bg = #ffffff）：
+     否则会出现「刘海/状态栏那一行是灰的、主页面是白的」的错位 */
+  --bg: #ffffff;
   --surface: #ffffff;
-  --surface2: #eef0f4;
+  --surface2: #f2f3f5;
   --surface3: #e4e7ee;
   --text: #1d2129;
   --text2: #6b7280;
@@ -281,6 +283,8 @@ body.dark .sync-pill.ok { color: #4ade80; }
 .note-card {
   background: var(--surface);
   border-radius: var(--radius);
+  /* 页面背景统一为白色后，卡片靠这条淡描边 + 阴影维持边界感 */
+  border: 1px solid var(--border);
   box-shadow: var(--shadow);
   padding: 12px 14px;
   margin-bottom: 10px;
@@ -344,7 +348,8 @@ body.dark .sync-pill.ok { color: #4ade80; }
 .fab {
   position: absolute;
   right: 16px;
-  bottom: calc(var(--nav-h) + 16px + env(safe-area-inset-bottom));
+  /* Simplenote 风格：底部不再有 Tab 栏，悬浮按钮只留层级起点自己的边距 */
+  bottom: calc(20px + env(safe-area-inset-bottom));
   width: 56px;
   height: 56px;
   border-radius: 18px;
@@ -362,33 +367,72 @@ body.dark .sync-pill.ok { color: #4ade80; }
 }
 .fab:active { transform: scale(0.95); }
 
-/* ---------- 底部导航 ---------- */
-.bottom-nav {
-  flex: none;
-  display: flex;
-  background: var(--bg);
-  border-top: 1px solid var(--border);
-  padding-bottom: env(safe-area-inset-bottom);
-  z-index: 15;
+/* ---------- 侧边抽屉菜单（Simplenote 风格） ---------- */
+.drawer-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 60;
 }
-.nav-btn {
+.drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(80vw, 300px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  z-index: 61;
+  /* 抽屉同样要覆盖到刘海/状态栏那一行，底色与页面一致 */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  transform: translateX(-100%);
+  transition: transform 0.22s ease;
+}
+.drawer.show { transform: translateX(0); }
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.drawer-logo { font-size: 26px; }
+.drawer-head-text { min-width: 0; }
+.drawer-appname { font-size: 17px; font-weight: 600; }
+.drawer-sub { font-size: 12px; color: var(--text3); margin-top: 2px; }
+
+.drawer-items {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 8px 12px;
+}
+.drawer-item {
   appearance: none;
   border: none;
   background: transparent;
-  flex: 1;
-  min-height: calc(var(--nav-h) - 8px);
-  padding: 6px 0 8px;
+  width: 100%;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 2px;
-  font-size: 11px;
-  color: var(--text2);
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 15.5px;
+  color: var(--text);
+  text-align: left;
   cursor: pointer;
 }
-.nav-btn .nav-ico { font-size: 19px; line-height: 1; }
-.nav-btn.active { color: var(--accent); }
+.drawer-item:active { background: var(--surface2); }
+.drawer-item.active { background: rgba(58, 122, 254, 0.12); color: var(--accent); font-weight: 600; }
+.drawer-ico { font-size: 19px; width: 24px; text-align: center; flex: none; }
+.drawer-count { margin-left: auto; font-size: 12.5px; color: var(--text3); font-weight: 400; }
+.drawer-foot { padding: 10px 16px; border-top: 1px solid var(--border); }
 
 /* ---------- 编辑器屏 ---------- */
 .screen-editor .appbar { border-bottom: 1px solid var(--border); }
@@ -521,6 +565,8 @@ body.dark .sync-pill.ok { color: #4ade80; }
 .set-group {
   background: var(--surface);
   border-radius: var(--radius);
+  /* 页面底色统一为白色后，靠淡描边维持分组边界 */
+  border: 1px solid var(--border);
   box-shadow: var(--shadow);
   padding: 4px 14px 14px;
   margin-bottom: 14px;
@@ -686,7 +732,7 @@ body.dark .sync-pill.ok { color: #4ade80; }
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--nav-h) + 26px + env(safe-area-inset-bottom));
+  bottom: calc(30px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 90;
   background: rgba(20, 23, 30, 0.92);
@@ -718,7 +764,6 @@ body.dark .sync-pill.ok { color: #4ade80; }
     z-index: 5;
   }
   #screenEditor { display: flex !important; flex: 1; min-width: 0; }
-  .bottom-nav { display: none; }
   .fab { bottom: 22px; }
   .toast { bottom: 26px; }
 

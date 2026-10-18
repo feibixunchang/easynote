@@ -46,7 +46,7 @@ iOS 用 `npm run ios` 打开 Xcode，登录 Apple ID 后选择自己的 iPhone �
 #   mobile/package.json 的 version
 #   mobile/www/app.js 里的 APP_VERSION
 #   android/app/build.gradle 的 versionName / versionCode、ios pbxproj 的 MARKETING_VERSION / CURRENT_PROJECT_VERSION
-git tag mobile-v1.0.1 && git push origin mobile-v1.0.1
+git tag mobile-v1.0.2 && git push origin mobile-v1.0.2
 ```
 
 CI 会产出：

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <!-- viewport-fit=cover 预留刘海/圆角安全区；interactive-widget 让键盘弹出时压缩视口而非遮挡输入框 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
-  <meta name="theme-color" content="#f5f6f8" id="themeColorMeta" />
+  <meta name="theme-color" content="#ffffff" id="themeColorMeta" />
   <meta name="format-detection" content="telephone=no" />
   <title>简易笔记</title>
   <link rel="stylesheet" href="styles.css" />
@@ -15,9 +15,9 @@
     <section class="screen screen-list" id="screenList">
       <header class="appbar">
         <div class="appbar-row">
+          <button class="icon-btn" id="btnDrawer" title="菜单（笔记 / 回收站 / 设置）">☰</button>
           <span class="appbar-logo">📝</span>
-          <span class="appbar-title">简易笔记</span>
-          <span class="version-pill" id="appVersion" title="当前版本">v1.0.0</span>
+          <span class="appbar-title" id="appbarTitle">简易笔记</span>
           <span class="flex-spacer"></span>
           <button class="icon-btn" id="btnSearch" title="搜索笔记">🔍</button>
           <button class="icon-btn" id="btnTheme" title="切换深色 / 浅色">🌙</button>
@@ -55,12 +55,6 @@
       <main class="note-list" id="noteList"></main>
 
       <button class="fab" id="newNoteBtn" title="新建笔记">＋</button>
-
-      <nav class="bottom-nav">
-        <button class="nav-btn active" data-tab="notes"><span class="nav-ico">📝</span><span>笔记</span></button>
-        <button class="nav-btn" data-tab="trash"><span class="nav-ico">🗑</span><span>回收站</span></button>
-        <button class="nav-btn" data-tab="settings"><span class="nav-ico">⚙</span><span>设置</span></button>
-      </nav>
     </section>
 
     <!-- ========== 编辑器屏 ========== -->
@@ -225,6 +219,26 @@
       </div>
     </div>
   </div>
+
+  <!-- ========== 侧边抽屉菜单（Simplenote 风格：笔记 / 回收站 / 设置） ========== -->
+  <div class="drawer-mask" id="drawerMask" hidden></div>
+  <nav class="drawer" id="drawer" hidden>
+    <div class="drawer-head">
+      <span class="drawer-logo">📝</span>
+      <div class="drawer-head-text">
+        <div class="drawer-appname">简易笔记</div>
+        <div class="drawer-sub">同一账号与电脑端实时同步</div>
+      </div>
+    </div>
+    <div class="drawer-items">
+      <button class="drawer-item active" data-view="notes"><span class="drawer-ico">📝</span><span>笔记</span><span class="drawer-count" id="drawerCountNotes"></span></button>
+      <button class="drawer-item" data-view="trash"><span class="drawer-ico">🗑</span><span>回收站</span><span class="drawer-count" id="drawerCountTrash"></span></button>
+      <button class="drawer-item" data-view="settings"><span class="drawer-ico">⚙</span><span>设置</span></button>
+    </div>
+    <div class="drawer-foot">
+      <span class="version-pill" id="appVersion" title="当前版本">v1.0.2</span>
+    </div>
+  </nav>
 
   <!-- ========== 底部动作面板（长按 / 更多菜单 / 选择器） ========== -->
   <div class="sheet-mask" id="sheetMask" hidden></div>

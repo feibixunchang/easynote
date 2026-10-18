@@ -4,7 +4,7 @@
   "webDir": "www",
   "android": {
     "allowMixedContent": true,
-    "backgroundColor": "f5f6f8"
+    "backgroundColor": "ffffff"
   },
   "plugins": {
     "SplashScreen": {
@@ -16,7 +16,7 @@
     },
     "StatusBar": {
       "style": "DEFAULT",
-      "backgroundColor": "4189e6"
+      "backgroundColor": "ffffff"
     }
   }
 }
