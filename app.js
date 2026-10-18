@@ -153,6 +153,24 @@
   function saveLocalOnly() {
     store.setItem(STORE_KEY, JSON.stringify(state.notes));
   }
+
+  /* 落盘防抖：图片是内嵌 base64，带图笔记的内容动辄几 MB。
+     逐字 JSON.stringify 全部笔记 + 写盘会让输入明显卡顿（带图笔记几乎没法继续打字），
+     所以内存即时更新、持久化延后 600ms 并合并。 */
+  var editorSaveTimer = null;
+  function scheduleEditorSave() {
+    if (editorSaveTimer) clearTimeout(editorSaveTimer);
+    editorSaveTimer = setTimeout(function () {
+      editorSaveTimer = null;
+      save();
+    }, 600);
+  }
+  function flushEditorSave() {
+    if (!editorSaveTimer) return;
+    clearTimeout(editorSaveTimer);
+    editorSaveTimer = null;
+    save();
+  }
   // 过滤掉已被永久删除（墓碑）的笔记，防止同步时从服务端还原
   function filterPurged() {
     if (!state.purged.length) return;
@@ -781,10 +799,14 @@
       if (!note || note.deleted) return;
       note.content = el.editor.value;
       note.modifiedDate = Date.now();
-      save();
+      // 内存即时更新，落盘防抖（带图笔记内容大，逐字写盘会卡输入）
+      scheduleEditorSave();
       clearTimeout(debounce);
       debounce = setTimeout(function () { renderList(); renderTags(); }, 250);
     });
+    // 失焦 / 关窗前把待落盘的改动写掉，避免最后 600ms 内的输入丢失
+    el.editor.addEventListener("blur", flushEditorSave);
+    window.addEventListener("beforeunload", flushEditorSave);
 
     el.infoClose.addEventListener("click", function () { el.infoModal.hidden = true; });
     el.infoModal.addEventListener("click", function (e) {

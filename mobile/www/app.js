@@ -23,7 +23,7 @@
   var TOTAL_KEY = "simplenote_zh_total";
   var DAV_KEY = "simplenote_zh_webdav";
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.3";
+  var APP_VERSION = "1.0.4";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -177,6 +177,33 @@
   }
   function saveLocalOnly() {
     store.setItem(STORE_KEY, JSON.stringify(state.notes));
+  }
+
+  /* 落盘防抖：图片是内嵌 base64，带图笔记的内容动辄几 MB。
+     如果每敲一个字都 JSON.stringify 全部笔记 + 写一次 localStorage，
+     手机上会直接卡到没法继续输入（表现为「有图片的笔记无法再编辑」）。
+     做法：内存里的 note.content 即时更新，持久化延后 600ms 并合并。 */
+  var editorSaveTimer = null;
+  var editorSavedTimer = null;
+  function scheduleEditorSave() {
+    if (el.saveFlag) el.saveFlag.textContent = "编辑中…";
+    if (editorSavedTimer) { clearTimeout(editorSavedTimer); editorSavedTimer = null; }
+    if (editorSaveTimer) clearTimeout(editorSaveTimer);
+    editorSaveTimer = setTimeout(function () {
+      editorSaveTimer = null;
+      save();
+      if (el.saveFlag) {
+        el.saveFlag.textContent = "已保存 " + pad(new Date().getHours()) + ":" + pad(new Date().getMinutes());
+        editorSavedTimer = setTimeout(function () { el.saveFlag.textContent = ""; }, 2000);
+      }
+    }, 600);
+  }
+  function flushEditorSave() {
+    if (!editorSaveTimer) return;
+    clearTimeout(editorSaveTimer);
+    editorSaveTimer = null;
+    if (el.saveFlag) el.saveFlag.textContent = "";
+    save();
   }
   function filterPurged() {
     if (!state.purged.length) return;
@@ -716,11 +743,13 @@
     if (name === "settings") refreshSettingsUI();
   }
   function goList() {
+    flushEditorSave();   // 离开编辑器前把待落盘的改动写掉
     state.preview = false;
     setScreen("list");
     renderAll();
   }
   function goSettings() {
+    flushEditorSave();
     setScreen("settings");
   }
   function goEditor(id) {
@@ -1945,11 +1974,9 @@
       if (!note || note.deleted) return;
       note.content = el.editor.value;
       note.modifiedDate = Date.now();
-      save();
       el.editorTitle.textContent = getTitle(note);
-      el.saveFlag.textContent = "已保存 " + pad(new Date().getHours()) + ":" + pad(new Date().getMinutes());
-      clearTimeout(saveFlagTimer);
-      saveFlagTimer = setTimeout(function () { el.saveFlag.textContent = ""; }, 2000);
+      // 内存即时更新，落盘防抖（带图笔记动辄几 MB，逐字写盘会卡死输入）
+      scheduleEditorSave();
       clearTimeout(debounce);
       debounce = setTimeout(function () { renderList(); renderTags(); }, 250);
     });
@@ -2058,8 +2085,12 @@
 
     // 切回前台立即同步（移动端常在后台被挂起）
     document.addEventListener("visibilitychange", function () {
-      if (!document.hidden && state.token) syncAll();
+      if (document.hidden) { flushEditorSave(); return; }  // 进后台先把改动落盘
+      if (state.token) syncAll();
     });
+    // 页面被销毁 / 切走时兜底落盘
+    window.addEventListener("pagehide", flushEditorSave);
+    window.addEventListener("beforeunload", flushEditorSave);
   }
 
   /* ---------------- 初始化 ---------------- */
