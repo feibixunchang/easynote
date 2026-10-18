@@ -207,12 +207,17 @@
     return "无标题";
   }
   function getSnippet(note) {
-    var lines = (note.content || "").split("\n");
+    var raw = note.content || "";
+    // 摘要里不显示 markdown 图片/链接语法：图片替换为 [图片]，链接只留文字
+    raw = raw.replace(/!\[[^\]]*\]\([^)]*\)/g, " [图片] ");
+    raw = raw.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    var lines = raw.split("\n");
     var skipped = false;
     for (var i = 0; i < lines.length; i++) {
       if (lines[i].trim().length) {
         if (!skipped) { skipped = true; continue; }
-        return lines[i].trim();
+        var s = lines[i].trim();
+        return s.length > 120 ? s.slice(0, 120) + "…" : s;
       }
     }
     return "";
@@ -265,12 +270,17 @@
       });
   }
   function renderMarkdown(src) {
-    var lines = escapeHtml(src).split("\n");
+    // 注意：不能先对整段 escapeHtml——"> 引用" 的 > 会被转成 &gt;，块级引用就永远匹配不上。
+    // 正确做法：逐行判定块级语法，输出时再对该行转义（inlineMd 不做转义）。
+    var lines = String(src || "").split("\n");
     var out = [];
     var inList = false;
     var inCode = false;
     var codeBuf = [];
     var m;
+    function closeList() {
+      if (inList) { out.push(inList === "ol" ? "</ol>" : "</ul>"); inList = false; }
+    }
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
       if (/^```/.test(line)) {
@@ -279,37 +289,37 @@
           codeBuf = [];
           inCode = false;
         } else {
-          if (inList) { out.push(inList === "ol" ? "</ol>" : "</ul>"); inList = false; }
+          closeList();
           inCode = true;
         }
         continue;
       }
-      if (inCode) { codeBuf.push(line); continue; }
-      if ((m = line.match(/^### (.*)/))) { if (inList) { out.push("</ul>"); inList = false; } out.push("<h3>" + inlineMd(m[1]) + "</h3>"); continue; }
-      if ((m = line.match(/^## (.*)/))) { if (inList) { out.push("</ul>"); inList = false; } out.push("<h2>" + inlineMd(m[1]) + "</h2>"); continue; }
-      if ((m = line.match(/^# (.*)/))) { if (inList) { out.push("</ul>"); inList = false; } out.push("<h1>" + inlineMd(m[1]) + "</h1>"); continue; }
-      if (/^---+$/.test(line)) { if (inList) { out.push("</ul>"); inList = false; } out.push("<hr>"); continue; }
-      if ((m = line.match(/^> (.*)/))) { if (inList) { out.push("</ul>"); inList = false; } out.push("<blockquote>" + inlineMd(m[1]) + "</blockquote>"); continue; }
+      if (inCode) { codeBuf.push(escapeHtml(line)); continue; }
+      if ((m = line.match(/^### (.*)/))) { closeList(); out.push("<h3>" + inlineMd(escapeHtml(m[1])) + "</h3>"); continue; }
+      if ((m = line.match(/^## (.*)/))) { closeList(); out.push("<h2>" + inlineMd(escapeHtml(m[1])) + "</h2>"); continue; }
+      if ((m = line.match(/^# (.*)/))) { closeList(); out.push("<h1>" + inlineMd(escapeHtml(m[1])) + "</h1>"); continue; }
+      if (/^---+$/.test(line)) { closeList(); out.push("<hr>"); continue; }
+      if ((m = line.match(/^> (.*)/))) { closeList(); out.push("<blockquote>" + inlineMd(escapeHtml(m[1])) + "</blockquote>"); continue; }
       if ((m = line.match(/^\s*[-*] (.*)/))) {
         if (!inList) { out.push("<ul>"); inList = "ul"; }
         if (inList === "ol") { out.push("</ol>"); out.push("<ul>"); inList = "ul"; }
-        out.push("<li>" + inlineMd(m[1]) + "</li>");
+        out.push("<li>" + inlineMd(escapeHtml(m[1])) + "</li>");
         continue;
       }
       if ((m = line.match(/^\s*\d+\. (.*)/))) {
         if (!inList) { out.push("<ol>"); inList = "ol"; }
         if (inList === "ul") { out.push("</ul>"); out.push("<ol>"); inList = "ol"; }
-        out.push("<li>" + inlineMd(m[1]) + "</li>");
+        out.push("<li>" + inlineMd(escapeHtml(m[1])) + "</li>");
         continue;
       }
       if (line.trim() === "") {
-        if (inList) { out.push(inList === "ol" ? "</ol>" : "</ul>"); inList = false; }
+        closeList();
         continue;
       }
-      if (inList) { out.push(inList === "ol" ? "</ol>" : "</ul>"); inList = false; }
-      out.push("<p>" + inlineMd(line) + "</p>");
+      closeList();
+      out.push("<p>" + inlineMd(escapeHtml(line)) + "</p>");
     }
-    if (inList) out.push(inList === "ol" ? "</ol>" : "</ul>");
+    closeList();
     if (inCode) out.push("<pre><code>" + codeBuf.join("\n") + "</code></pre>");
     return out.join("\n");
   }
@@ -382,8 +392,11 @@
 
   /* ---------------- 过滤 / 排序 ---------------- */
   function getNotes() {
+    var inTrash = state.view === "trash";
     var list = state.notes.filter(function (n) {
-      return n.deleted === (state.view === "trash");
+      // 用 !!.deleted 归一化：从服务端拉来的老笔记可能没有 deleted 字段，
+      // 之前 n.deleted === false 会把这类笔记全部过滤掉（列表看起来"丢笔记"）。
+      return !!n.deleted === inTrash;
     });
     if (state.view === "notes" && state.activeTag) {
       list = list.filter(function (n) {
@@ -495,7 +508,7 @@
 
   function renderEditor() {
     var note = state.notes.filter(function (n) { return n.id === state.currentId; })[0];
-    var valid = note && note.deleted === (state.view === "trash");
+    var valid = note && !!note.deleted === (state.view === "trash");
     el.listTitle.textContent = state.view === "trash"
       ? "回收站"
       : state.activeTag ? "#" + state.activeTag : "全部笔记";
@@ -532,7 +545,7 @@
     renderTags();
     var list = getNotes();
     var cur = state.notes.filter(function (n) { return n.id === state.currentId; })[0];
-    if (!cur || cur.deleted !== (state.view === "trash")) {
+    if (!cur || !!cur.deleted !== (state.view === "trash")) {
       state.currentId = list.length ? list[0].id : null;
     }
     renderList();

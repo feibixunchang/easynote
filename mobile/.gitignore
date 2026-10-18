@@ -1,0 +1,30 @@
+# 依赖
+node_modules/
+
+# Capacitor 生成物（原生工程目录纳入版本管理，构建产物忽略）
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/app/release/
+android/app/debug/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/app/src/main/res/xml/config.xml
+android/app/src/main/res/values/strings.xml
+
+# iOS：原生工程纳入版本管理；构建产物与 cap sync 生成物由 ios/.gitignore 处理
+ios/App/build/
+ios/App/Pods/
+ios/App/Podfile.lock
+ios/DerivedData/
+*.xcuserstate
+xcuserdata/
+ios/capacitor-cordova-ios-plugins/
+
+# 图标资源生成缓存
+resources/*.orig
+
+# 系统垃圾
+.DS_Store

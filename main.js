@@ -274,23 +274,41 @@ function fetchWithTimeout(url, ms) {
   }).finally(function () { clearTimeout(timer); });
 }
 
-// 多渠道探测最新版本号（任一成功即返回 "x.y.z" 字符串）：
-//  ① api.github.com REST 接口：信息最全，但未认证限额 60 次/小时/IP，
-//     共用出口 IP（公司网络/代理）容易被限流返回 403；
+// 桌面端只认纯 semver 发布 tag：v1.2.3 / 1.2.3 / 1.2（可有前导 v）。
+// 移动端发布使用 mobile-v* 标签，必须在更新检查里过滤掉，否则桌面端会把
+// 移动端版本误判为自己的新版本，并构造出错误的下载地址。
+const DESKTOP_TAG_RE = /^v?\d+(?:\.\d+){1,2}$/;
+function normalizeDesktopTag(tag) {
+  const t = String(tag || "").trim();
+  if (!DESKTOP_TAG_RE.test(t)) return null;
+  return t.replace(/^v/i, "");
+}
+
+// 多渠道探测最新桌面端版本号（任一成功即返回 "x.y.z" 字符串）：
+//  ① api.github.com REST 接口：请求 releases 列表并挑第一条纯 semver tag。
+//     注意不能用 /releases/latest——它返回的是"最新一个 Release"，
+//     可能是移动端的 mobile-v* 发布；列表 + 过滤才能稳定拿到桌面端最新版。
+//     未认证限额 60 次/小时/IP，共用出口 IP（公司网络/代理）容易 403；
 //  ② github.com 的 /releases/latest 页面：302 重定向到最新 tag 的页面，
-//     走 web 节点、限额宽得多，国内可达性通常也更好；
-//  ③ releases.atom 订阅源：同为 web 节点，XML 里第一条即最新 Release。
+//     走 web 节点、限额宽得多，国内可达性通常也更好；只有重定向目标
+//     是纯 semver tag 时才采用（否则说明最新发布是移动端，交给 atom 扫列表）；
+//  ③ releases.atom 订阅源：同为 web 节点，XML 按发布时间倒序，
+//     扫出第一条纯 semver 的桌面端 tag。
 // 三端（macOS/Windows/Linux）通用；全部失败才判定为检查失败。
 async function fetchLatestVersion() {
   const repo = REPO_OWNER + "/" + REPO_NAME;
 
-  // ① REST API
+  // ① REST API releases 列表 + semver 过滤
   try {
-    const res = await fetchWithTimeout("https://api.github.com/repos/" + repo + "/releases/latest");
+    const res = await fetchWithTimeout("https://api.github.com/repos/" + repo + "/releases?per_page=20");
     if (res.ok) {
-      const data = await res.json();
-      const tag = String((data && data.tag_name) || "").replace(/^v/i, "");
-      if (tag) return tag;
+      const list = await res.json();
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          const v = normalizeDesktopTag(item && item.tag_name);
+          if (v) return v;
+        }
+      }
     }
   } catch (e) { /* 尝试下一个渠道 */ }
 
@@ -298,16 +316,21 @@ async function fetchLatestVersion() {
   try {
     const res = await fetchWithTimeout("https://github.com/" + repo + "/releases/latest");
     const m = String(res.url || "").match(/\/releases\/tag\/([^/?#]+)/);
-    if (m && m[1]) return m[1].replace(/^v/i, "");
+    const v = m && m[1] ? normalizeDesktopTag(m[1]) : null;
+    if (v) return v;
   } catch (e) { /* 尝试下一个渠道 */ }
 
-  // ③ releases.atom
+  // ③ releases.atom：倒序扫描，取第一条纯 semver 桌面端 tag
   try {
     const res = await fetchWithTimeout("https://github.com/" + repo + "/releases.atom");
     if (res.ok) {
       const xml = await res.text();
-      const m = xml.match(/<id>tag:github\.com,2008:Repository\/\d+\/([^<]+)<\/id>/);
-      if (m && m[1]) return m[1].replace(/^v/i, "");
+      const re = /<id>tag:github\.com,2008:Repository\/\d+\/([^<]+)<\/id>/g;
+      let m;
+      while ((m = re.exec(xml)) !== null) {
+        const v = normalizeDesktopTag(m[1]);
+        if (v) return v;
+      }
     }
   } catch (e) { /* 全部失败 */ }
 

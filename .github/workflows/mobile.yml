@@ -1,0 +1,174 @@
+name: 简易笔记 · 移动端打包发布
+
+# 推送 mobile-v* 标签时自动构建 iOS / Android 安装包并发布到一个 GitHub Release。
+#   git tag mobile-v1.0.0 && git push origin mobile-v1.0.0
+#
+# 说明：
+#   - Android：GitHub Runner 无签名证书，产出 debug APK——可直接安装到手机
+#     （需在系统里允许"安装未知应用"）。想上架应用商店需自行签名 release 包。
+#   - iOS：云端没有苹果开发者证书，产出【未签名 IPA】。iPhone 无法直接安装，
+#     需在 Mac 上用 Xcode 重新签名（或用 AltStore / Sideloadly 等工具侧载），
+#     详见 Release 里的安装说明。桌面端三端打包见 build.yml（tag v*）。
+
+on:
+  push:
+    tags:
+      - "mobile-v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Capacitor 8 的 capacitor.build.gradle 要求 source/target compatibility 21
+          java-version: "21"
+
+      - name: 安装 Node 依赖
+        working-directory: mobile
+        run: npm ci
+
+      - name: 同步 Web 资源到 Android 工程（cap sync 会把 package.json 版本号写入原生工程）
+        working-directory: mobile
+        run: npx cap sync android
+
+      - name: 确保 Android SDK 36 平台可用
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: 构建 Debug APK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: 收集 APK
+        shell: bash
+        run: |
+          mkdir -p release
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk "release/简易笔记-${{ github.ref_name }}-android.apk"
+          ls -lh release/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: 简易笔记-Android
+          path: release/
+
+  build-ios:
+    runs-on: macos-latest
+    # 云端无法签名：本 job 失败不阻塞 Android 发布（release job 不依赖它）
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装 Node 依赖
+        working-directory: mobile
+        run: npm ci
+
+      - name: 同步 Web 资源到 iOS 工程（Capacitor 8 用 SPM，无需 pod install）
+        working-directory: mobile
+        run: npx cap sync ios
+
+      - name: 归档并导出未签名 IPA
+        working-directory: mobile/ios/App
+        run: |
+          set -euo pipefail
+          rm -rf build
+          xcodebuild archive \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -archivePath "$PWD/build/App.xcarchive" \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            CODE_SIGN_ENTITLEMENTS=""
+          mkdir -p build/Payload
+          cp -R "build/App.xcarchive/Products/Applications/App.app" build/Payload/
+          (cd build && zip -qry "简易笔记-${{ github.ref_name }}-ios-unsigned.ipa" Payload)
+          ls -lh build/*.ipa
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: 简易笔记-iOS
+          path: mobile/ios/App/build/*.ipa
+
+  release:
+    needs: build-android
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载 Android 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: 简易笔记-Android
+          path: all-artifacts
+
+      - name: 下载 iOS 产物（可能不存在：云端签名受限时归档可能失败）
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: 简易笔记-iOS
+          path: all-artifacts
+
+      - name: 列出产物
+        run: ls -lh all-artifacts/
+
+      - name: 发布 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 简易笔记 移动端 ${{ github.ref_name }}
+          files: all-artifacts/*
+          body: |
+            ## 简易笔记 移动端 ${{ github.ref_name }}
+
+            与桌面端（macOS / Windows / Linux）功能一致的 iOS / Android 版本，
+            同一账号即可与电脑端实时同步笔记。
+
+            ### 📱 安装
+
+            | 平台 | 文件 | 安装方式 |
+            | --- | --- | --- |
+            | 🤖 Android | `*-android.apk` | 下载后用手机打开，允许"安装未知应用"即可（无需 Play 商店） |
+            | 🍎 iOS | `*-ios-unsigned.ipa`（可能没有） | 未签名 IPA，iPhone 不能直接装，见下方说明 |
+
+            ### 🍎 iOS 未签名 IPA 安装说明（三选一）
+
+            1. **Xcode 重签名（推荐，需要一台 Mac）**：
+               解压 IPA 得到 `Payload/App.app`，用 Xcode 打开 `mobile/ios/App/App.xcodeproj`，
+               在 Signing & Capabilities 里登录自己的 Apple ID（免费账号即可，签名 7 天有效），
+               选择自己的 iPhone 作为目标设备运行。
+            2. **AltStore / Sideloadly（免费 Apple ID 侧载）**：按工具指引导入 IPA 并用 Apple ID 签名。
+            3. **自签名脚本**：`codesign -f -s "Apple Development: <你的名字>" Payload/App.app` 后重打包。
+
+            ### ☁️ 云同步
+
+            设置 → 账号里填同步服务器地址（如 `http://192.168.1.100:3000`）与账号密码，
+            与桌面端共用同一服务端；服务端部署见仓库 `server/README.md`。
+
+            ### 更新内容
+            - 首个移动端版本：笔记/回收站/标签/颜色/置顶/搜索/Markdown 预览/插入图片（拍照、相册）/链接/导出备份，与桌面端一致
+            - 手机优先的单栏界面，平板/折叠屏自动切换双栏；深色模式、安全区适配
+            - 登录后每 3 秒增量同步，其他设备的修改自动显示
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

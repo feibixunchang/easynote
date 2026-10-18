@@ -1,8 +1,10 @@
 # 简易笔记（Simplenote 风格 · 中文版）
 
 一个高度还原 [Simplenote](https://simplenote.com/) 界面与交互的**纯中文**笔记软件。
-提供 **Windows / macOS / Linux** 三端桌面版（Electron），也可直接在浏览器里打开 `index.html` 使用。
+提供 **Windows / macOS / Linux** 三端桌面版（Electron），**iOS / Android** 移动端（Capacitor），
+也可直接在浏览器里打开 `index.html` 使用。
 本地优先：数据默认保存在本机，无需账号、无需联网即可记录。
+**五端同一账号实时同步**：电脑上记的笔记，手机上自动显示（反之亦然）。
 
 ## ✨ 功能特性
 
@@ -37,8 +39,11 @@
 | 🍎 macOS（Intel + Apple 芯片通用） | `easynote-<版本>.dmg` | 打开 dmg，把「简易笔记」拖进「应用程序」 |
 | 🪟 Windows | `easynote-Setup-<版本>.exe` | 双击安装向导安装 |
 | 🐧 Linux | `easynote-<版本>-x86_64.AppImage` / `easynote-<版本>-amd64.deb` | AppImage 加可执行权限即可运行；deb 用 `sudo dpkg -i` 安装 |
+| 🤖 Android | `简易笔记-mobile-v<版本>-android.apk` | 下载后用手机打开，允许「安装未知应用」即可 |
+| 🍎 iOS | `简易笔记-mobile-v<版本>-ios-unsigned.ipa` | 未签名 IPA，需在 Mac 上重签名或侧载，见 [移动端说明](#-移动端ios--android) |
 
-> 直接下载最新版：<https://github.com/feibixunchang/easynote/releases/latest>
+> 桌面端最新版：<https://github.com/feibixunchang/easynote/releases/latest>
+> 移动端版本：<https://github.com/feibixunchang/easynote/releases>（找 `mobile-v*` 标签的 Release）
 
 > 🐧 **Linux deb 说明**：v1.2.6 起修复了 Deepin 25 等系统上 `dpkg` 报「Invalid cross-device link」导致安装失败的问题（deb 内图标不再使用硬链接条目）；CI 每次发布前也会自检，含硬链接条目的 deb 会被拒绝发布。
 
@@ -57,11 +62,34 @@ CI 没有苹果开发者证书，产物是 **ad-hoc 签名**。从浏览器下�
 6. **深色模式 / 主题 / 字体 / 图片插入方式 / WebDAV 导出**：左下角「🌙 深色模式」「⚙ 设置」。
 7. **导出 / 导入备份**：左下角「⬇ 导出备份」「⬆ 导入备份」。
 
+## 📱 移动端（iOS / Android）
+
+`mobile/` 目录是与桌面端**功能完全一致**的 Capacitor 应用：同一套同步协议、同一个账号，
+电脑和手机的笔记实时互相同步。界面为手机优先的单栏设计（列表 / 编辑器 / 设置 + 底部导航），
+平板与折叠屏（宽 ≥720px）自动切换双栏；深色模式、安全区（刘海 / 手势条）均已适配。
+
+- **功能对齐桌面端**：笔记 / 回收站 / 标签 / 颜色标签 / 置顶 / 搜索 / Markdown 预览 /
+  插入图片（拍照 📷 / 相册 🖼，自动压缩后内嵌）/ 插入链接 / 导出备份 / 深色模式 /
+  3 秒增量云同步 / 更新检查。
+- **交互按手机习惯调整**：长按笔记弹出底部操作面板（置顶 / 颜色 / 回收站 / 更多），
+  返回键优先返回列表，切到后台再回来会自动同步。
+- **Android**：Release 页面下载 APK 直接安装（需允许「安装未知应用」）；
+  内网 HTTP 同步服务器已允许（`usesCleartextTraffic`）。
+- **iOS**：云端没有苹果开发者证书，产物为**未签名 IPA**，iPhone 不能直接安装，需：
+  1. **Mac + Xcode 重签名（推荐）**：解压 IPA 得到 `Payload/App.app`，用 Xcode 打开
+     `mobile/ios/App/App.xcodeproj`，登录自己的 Apple ID（免费账号即可，签名 7 天有效），
+     选自己的 iPhone 运行；
+  2. **AltStore / Sideloadly 侧载**：按工具指导致导入 IPA 并用 Apple ID 签名。
+
+> 移动端版本号独立计数：桌面端 tag 为 `v1.2.8`，移动端 tag 为 `mobile-v1.0.0`。
+> 两边更新检查只认自己的标签，互不打扰。
+
 ## 🔔 更新提示
 
 - 软件**启动几秒后自动检查**一次新版，之后每 6 小时检查一次（检查失败会 10 分钟后自动重试）；发现新版本会在**左侧栏弹出横幅**（显示新版本号 + 「下载」按钮），点击即打开下载页。
 - 也可以**手动检查**：点击侧栏左上角的**版本号徽标**（如 `v1.2.6`）——结果会明确显示：`发现新版本` / `✓ 已是最新版本` / `检查更新失败`（失败时可点横幅上的「重试」）。
-- 检查走**多渠道兜底**：GitHub API → releases 页面重定向 → releases.atom，任一通道成功即可（API 有每小时限额，国内网络下备用通道更稳）。
+- 检查走**多渠道兜底**：GitHub API（releases 列表）→ releases 页面重定向 → releases.atom，任一通道成功即可（API 有每小时限额，国内网络下备用通道更稳）。
+- 桌面端只认纯 semver 标签（`v1.2.8` / `1.2.8` / `1.2`），移动端的 `mobile-v*` 标签会被忽略——两边更新互不打扰。
 - 由于没有开发者证书，暂不支持"一键自动升级"，采用「检测到新版 → 提示 → 前往下载页手动装」的方式。
 
 ## 💾 笔记数据保存在哪里
@@ -98,6 +126,19 @@ npm run dist:linux          # 打包 Linux AppImage + deb
 > 在 Mac 上本地打包可绕开 Gatekeeper：`bash build-mac-local.sh`。
 > 三端并行自动构建：给仓库打一个 `v*` 标签并推送，即触发 `.github/workflows/build.yml`（GitHub Actions），
 > 三个平台各自打包后聚合成一个 Release。
+
+移动端（iOS / Android）本地构建：
+
+```bash
+cd mobile
+npm install
+npm run sync                # 把 www 同步进原生工程
+npm run build:android       # 生成 android/app/build/outputs/apk/debug/app-debug.apk
+npm run build:ios           # 同步 iOS 工程后用 Xcode 打开 mobile/ios/App/App.xcodeproj 运行
+```
+
+> 移动端自动构建：推送 `mobile-v*` 标签触发 `.github/workflows/mobile.yml`，
+> 云端产出 Android APK（可直接安装）与 iOS 未签名 IPA（需自行签名）。
 
 ## ☁ 云同步（可选）
 
@@ -139,8 +180,10 @@ npm start                   # 默认监听 http://localhost:3000
 | `package.json` | 运行 / 三端打包配置 |
 | `build/` | 应用图标、托盘图标、macOS ad-hoc 签名钩子 `afterSign.js`、Linux 解硬链接钩子 `afterPack.js` |
 | `build-mac-local.sh` | 在 Mac 上本地打包，绕开 Gatekeeper 拦截 |
+| `mobile/` | 移动端（iOS / Android）Capacitor 工程：`www/` 为手机 UI 源码，`android/`、`ios/` 为原生工程，`tools/gen-icons.js` 生成图标与启动图 |
 | `server/` | 云同步服务端（Express + JWT + 文件存储） |
-| `.github/workflows/build.yml` | GitHub Actions 三端自动打包工作流 |
+| `.github/workflows/build.yml` | GitHub Actions 三端自动打包工作流（tag `v*`） |
+| `.github/workflows/mobile.yml` | GitHub Actions 移动端打包工作流（tag `mobile-v*`） |
 
 ## 已知范围
 

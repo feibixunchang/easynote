@@ -1,0 +1,22 @@
+{
+  "appId": "com.feibixunchang.easynote",
+  "appName": "简易笔记",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "f5f6f8"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "launchShowDuration": 600,
+      "backgroundColor": "4189e6",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DEFAULT",
+      "backgroundColor": "4189e6"
+    }
+  }
+}
