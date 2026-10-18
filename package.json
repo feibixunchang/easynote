@@ -31,8 +31,10 @@
       "main.js",
       "preload.js",
       "build/icon.png",
-      "build/icons/**"
+      "build/icons/**",
+      "build/afterSign.js"
     ],
+    "afterSign": "./build/afterSign.js",
     "win": {
       "target": "nsis",
       "artifactName": "easynote-Setup-${version}.${ext}"
