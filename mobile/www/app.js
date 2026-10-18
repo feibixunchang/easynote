@@ -23,7 +23,7 @@
   var TOTAL_KEY = "simplenote_zh_total";
   var DAV_KEY = "simplenote_zh_webdav";
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.7";
+  var APP_VERSION = "1.0.8";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -584,6 +584,21 @@
       item.appendChild(top);
       item.appendChild(snip);
       item.appendChild(meta);
+
+      // 回收站：列表里直接给一个「♻ 恢复」，不用先进详情页再点工具条
+      if (state.view === "trash") {
+        item.classList.add("is-trash");
+        var restoreBtn = document.createElement("button");
+        restoreBtn.type = "button";
+        restoreBtn.className = "card-restore";
+        restoreBtn.textContent = "♻ 恢复";
+        restoreBtn.title = "恢复到笔记";
+        restoreBtn.addEventListener("click", function (e) {
+          if (e && e.stopPropagation) e.stopPropagation();
+          handleAction("restore", n);
+        });
+        item.appendChild(restoreBtn);
+      }
 
       // 点击打开；长按（或鼠标右键）出操作面板
       item.addEventListener("click", function () { selectNote(n.id); });

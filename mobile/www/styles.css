@@ -307,6 +307,31 @@ body.dark .sync-pill.ok { color: #4ade80; }
   user-select: none;
 }
 .note-card:active { background: var(--surface2); }
+/* 回收站卡片：右侧留出位置给「♻ 恢复」按钮 */
+.note-card.is-trash { padding-right: 88px; }
+.card-restore {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  appearance: none;
+  border: none;
+  background: rgba(58, 122, 254, 0.12);
+  color: var(--accent);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.card-restore:active { background: rgba(58, 122, 254, 0.24); }
 /* 选中态：与桌面端一致用「淡蓝填充」表示，而不是只描一圈边（描边看起来像没铺满） */
 .note-card.selected {
   background: rgba(58, 122, 254, 0.12);
