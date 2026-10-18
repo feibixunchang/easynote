@@ -218,12 +218,25 @@
   }
 
   /* ---------------- Markdown ---------------- */
+  function escapeAttr(s) {
+    return String(s)
+      .replace(/"/g, "%22")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
   function inlineMd(s) {
     return s
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\*([^*]+)\*/g, "<em>$1</em>")
       .replace(/`([^`]+)`/g, "<code>$1</code>")
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      // 图片：![alt](url) → <img>，点击在外部程序打开
+      .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_m, alt, url) {
+        return '<img class="md-img" alt="' + escapeAttr(alt) + '" src="' + escapeAttr(url) + '" title="点击在外部打开">';
+      })
+      // 链接：[text](url) → <a data-mdlink>，点击用默认浏览器打开
+      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_m, t, url) {
+        return '<a href="' + escapeAttr(url) + '" data-mdlink="1" rel="noopener">' + t + "</a>";
+      });
   }
   function renderMarkdown(src) {
     var lines = escapeHtml(src).split("\n");
@@ -424,6 +437,9 @@
         '<button data-action="color" class="' + (note.color ? "active" : "") + '" title="设置颜色标签">●</button>' +
         '<button data-action="markdown" class="' + (note.markdown ? "active" : "") + '" title="开启 / 关闭 Markdown">M↓</button>' +
         '<button data-action="preview" class="' + (state.preview ? "active" : "") + '" title="预览" ' + (note.markdown ? "" : "disabled") + ">👁</button>" +
+        '<button data-action="insertText" title="插入文本（引用/代码/分隔线/日期）">文</button>' +
+        '<button data-action="insertImage" title="插入图片">🖼</button>' +
+        '<button data-action="insertLink" title="插入链接（点击可跳转）">🔗</button>' +
         '<button data-action="info" title="笔记信息">ⓘ</button>' +
         '<button data-action="share" title="复制内容到剪贴板">↗</button>' +
         '<button data-action="trash" title="移到回收站">🗑</button>' +
@@ -549,6 +565,18 @@
         openColorMenu(r.left, r.bottom + 4, note);
         break;
       }
+      case "insertText": {
+        var tbtn = el.toolbar.querySelector('[data-action="insertText"]');
+        var tr = tbtn ? tbtn.getBoundingClientRect() : { left: 200, bottom: 80 };
+        openInsertTextMenu(tr.left, tr.bottom + 4);
+        break;
+      }
+      case "insertImage":
+        insertImage();
+        break;
+      case "insertLink":
+        insertLink();
+        break;
     }
   }
 
@@ -714,21 +742,48 @@
     // 编辑器右键菜单（全中文）
     el.editor.addEventListener("contextmenu", function (e) {
       e.preventDefault();
+      ctxX = e.clientX;
+      ctxY = e.clientY;
       showCtxMenu(e.clientX, e.clientY, [
         { label: "撤销", shortcut: "Ctrl+Z", action: function () { el.editor.focus(); document.execCommand("undo"); } },
         { label: "重做", shortcut: "Ctrl+Y", action: function () { el.editor.focus(); document.execCommand("redo"); } },
         { sep: true },
         { label: "插入清单", action: function () { insertChecklist(); } },
+        { label: "插入文本元素…", submenu: [
+          { label: "引用块", action: function () { insertTextElement("quote"); } },
+          { label: "代码块", action: function () { insertTextElement("code"); } },
+          { label: "分隔线", action: function () { insertTextElement("hr"); } },
+          { label: "当前日期时间", action: function () { insertTextElement("datetime"); } },
+        ] },
+        { label: "插入图片", action: function () { insertImage(); } },
+        { label: "插入链接", action: function () { insertLink(); } },
         { sep: true },
         { label: "剪切", shortcut: "Ctrl+X", action: function () { document.execCommand("cut"); } },
         { label: "复制", shortcut: "Ctrl+C", action: function () { document.execCommand("copy"); } },
-        { label: "粘贴", shortcut: "Ctrl+V", action: function () { document.execCommand("paste"); } },
+        { label: "粘贴", shortcut: "Ctrl+V", action: function () { pasteAtCursor(); } },
         { label: "全选", shortcut: "Ctrl+A", action: function () { el.editor.focus(); el.editor.select(); } },
       ]);
     });
 
     // 点击空白处关闭右键菜单
     document.addEventListener("click", hideCtxMenu);
+
+    // 预览区：点击链接 / 图片 → 用默认浏览器或外部程序打开
+    el.previewPane.addEventListener("click", function (e) {
+      var a = e.target.closest("a[data-mdlink]");
+      if (a) {
+        e.preventDefault();
+        var href = a.getAttribute("href");
+        if (href) openExternal(href);
+        return;
+      }
+      var img = e.target.closest("img.md-img");
+      if (img) {
+        e.preventDefault();
+        var src = img.getAttribute("src");
+        if (src) openExternal(src);
+      }
+    });
 
     el.settingsClose.addEventListener("click", function () { el.settingsModal.hidden = true; });
     el.settingsModal.addEventListener("click", function (e) {
@@ -1087,18 +1142,30 @@
         return;
       }
       var row = document.createElement("div");
-      row.className = "ctx-item" + (it.danger ? " danger" : "");
+      row.className = "ctx-item" + (it.danger ? " danger" : "") + (it.submenu ? " has-sub" : "");
       var lbl = document.createElement("span");
       lbl.textContent = it.label;
       if (it.color) lbl.style.color = it.color;
       row.appendChild(lbl);
-      if (it.shortcut) {
+      if (it.submenu) {
+        var ar = document.createElement("span");
+        ar.className = "shortcut";
+        ar.textContent = "▸";
+        row.appendChild(ar);
+      } else if (it.shortcut) {
         var sc = document.createElement("span");
         sc.className = "shortcut";
         sc.textContent = it.shortcut;
         row.appendChild(sc);
       }
-      row.addEventListener("click", function () {
+      row.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (it.submenu) {
+          // 在该项右侧展开子菜单（替换当前菜单内容）
+          var rect = row.getBoundingClientRect();
+          showCtxMenu(rect.right - 4, rect.top - 4, it.submenu);
+          return;
+        }
         hideCtxMenu();
         if (it.action) it.action();
       });
@@ -1155,6 +1222,134 @@
     ta.selectionStart = ta.selectionEnd = pos;
     ta.focus();
     ta.dispatchEvent(new Event("input"));
+  }
+
+  /* ---------------- 插入文本 / 图片 / 链接 ---------------- */
+  var ctxX = 0, ctxY = 0; // 记录右键坐标，供子菜单定位
+
+  function currentNote() {
+    return state.notes.filter(function (n) { return n.id === state.currentId; })[0] || null;
+  }
+
+  // 在光标处插入文本（替换当前选区），并触发 input 保存
+  function insertAtCursor(ta, text) {
+    var start = ta.selectionStart, end = ta.selectionEnd;
+    var val = ta.value;
+    ta.value = val.slice(0, start) + text + val.slice(end);
+    var pos = start + text.length;
+    ta.selectionStart = ta.selectionEnd = pos;
+  }
+
+  function triggerInput(ta) {
+    ta.focus();
+    ta.dispatchEvent(new Event("input"));
+  }
+
+  // 用默认浏览器 / 外部程序打开地址（Electron 走主进程，纯网页走 window.open）
+  function openExternal(url) {
+    var api = window.electronAPI;
+    if (api && api.openExternal) {
+      api.openExternal(url);
+    } else if (url) {
+      window.open(url, "_blank");
+    }
+  }
+
+  // 修复：右键「粘贴」——从系统剪贴板读取文本并插入（document.execCommand("paste") 在隔离环境不可靠）
+  function pasteAtCursor() {
+    var ta = el.editor;
+    var note = currentNote();
+    if (!note || note.deleted) return;
+    el.editor.focus();
+    var api = window.electronAPI;
+    if (api && api.getClipboardText) {
+      api.getClipboardText().then(function (text) {
+        if (text == null) text = "";
+        if (!text) { toast("剪贴板为空或无法读取"); return; }
+        insertAtCursor(ta, text);
+        triggerInput(ta);
+      }).catch(function () { toast("无法读取剪贴板"); });
+    } else if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then(function (t) {
+        insertAtCursor(ta, t || "");
+        triggerInput(ta);
+      }).catch(function () { try { document.execCommand("paste"); } catch (e) {} });
+    } else {
+      try { document.execCommand("paste"); } catch (e) {}
+    }
+  }
+
+  // 绝对路径 → file:// URL（macOS/Windows 通用）
+  function fileUrl(p) {
+    if (/^file:\/\//i.test(p)) return p;
+    var norm = String(p).replace(/\\/g, "/");
+    if (/^[a-zA-Z]:/.test(norm)) return "file:///" + norm; // Windows 盘符
+    return "file://" + norm; // Unix 绝对路径
+  }
+
+  function insertImage() {
+    var note = currentNote();
+    if (!note || note.deleted) return;
+    var api = window.electronAPI;
+    if (!api || !api.pickImage) { toast("当前环境不支持选择图片"); return; }
+    api.pickImage().then(function (p) {
+      if (!p) return;
+      var name = String(p).split(/[\\/]/).pop() || "图片";
+      var url = fileUrl(p);
+      var md = "\n![" + name + "](" + url + ")\n";
+      insertAtCursor(el.editor, md);
+      triggerInput(el.editor);
+      toast("已插入图片（Markdown 预览模式下可见，点击可外部打开）");
+    }).catch(function () { toast("插入图片失败"); });
+  }
+
+  function insertLink() {
+    var ta = el.editor;
+    var note = currentNote();
+    if (!note || note.deleted) return;
+    var sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+    var url = window.prompt("输入链接地址（https://…）", "https://");
+    if (url == null) return;
+    url = url.trim();
+    if (!url) { toast("链接地址不能为空"); return; }
+    var text = sel;
+    if (!text) {
+      text = window.prompt("显示文字（留空则使用链接地址）", url);
+      if (text == null) return;
+    }
+    var md = "[" + (text || url) + "](" + url + ")";
+    insertAtCursor(ta, md);
+    triggerInput(ta);
+    toast("已插入链接（预览 / 点击可打开）");
+  }
+
+  function formatDateTime(d) {
+    function p(n) { return n < 10 ? "0" + n : "" + n; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
+  function insertTextElement(type) {
+    var note = currentNote();
+    if (!note || note.deleted) return;
+    var snippet;
+    if (type === "quote") snippet = "\n> 引用内容\n";
+    else if (type === "code") snippet = "\n```\n代码\n```\n";
+    else if (type === "hr") snippet = "\n---\n";
+    else if (type === "datetime") snippet = formatDateTime(new Date());
+    else snippet = "";
+    if (!snippet) return;
+    insertAtCursor(el.editor, snippet);
+    triggerInput(el.editor);
+  }
+
+  function openInsertTextMenu(x, y) {
+    showCtxMenu(x, y, [
+      { label: "引用块", action: function () { insertTextElement("quote"); } },
+      { label: "代码块", action: function () { insertTextElement("code"); } },
+      { label: "分隔线", action: function () { insertTextElement("hr"); } },
+      { label: "当前日期时间", action: function () { insertTextElement("datetime"); } },
+    ]);
   }
 
   /* ---------------- 初始化 ---------------- */

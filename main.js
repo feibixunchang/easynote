@@ -1,5 +1,5 @@
 /* ============ Electron 主进程 ============ */
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme, clipboard } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { execSync, execFile } = require("child_process");
@@ -351,6 +351,35 @@ ipcMain.handle("open-external", function (_e, url) {
   }
 });
 
+// 读取系统剪贴板文本（右键「粘贴」走这里，比 document.execCommand("paste") 可靠）
+ipcMain.handle("get-clipboard-text", function () {
+  try {
+    return clipboard.readText();
+  } catch (e) {
+    return "";
+  }
+});
+
+// 弹出系统文件选择框，挑选要插入的图片，返回绝对路径（取消则返回 null）
+ipcMain.handle("pick-image", function () {
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve(null);
+  return dialog
+    .showOpenDialog(mainWindow, {
+      title: "选择要插入的图片",
+      properties: ["openFile"],
+      filters: [
+        { name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic"] },
+      ],
+    })
+    .then(function (res) {
+      if (res.canceled || !res.filePaths || !res.filePaths.length) return null;
+      return res.filePaths[0];
+    })
+    .catch(function () {
+      return null;
+    });
+});
+
 ipcMain.handle("set-titlebar-dark", function (_e, dark) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     applyTitlebarTheme(mainWindow, !!dark);
@@ -552,25 +581,34 @@ function buildMenu(win) {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-app.whenReady().then(() => {
-  mainWindow = createWindow();
-  buildMenu(mainWindow);
-  createTray();
-  // 启动 5 秒后静默检查一次更新，之后每 6 小时一次
-  setTimeout(() => checkUpdate(false), 5000);
-  setInterval(() => checkUpdate(false), 6 * 60 * 60 * 1000);
-  // 系统深浅色变化时推送给渲染进程（跟随系统模式）
-  nativeTheme.on("updated", () => {
-    [mainWindow, ...BrowserWindow.getAllWindows()].forEach(function (w) {
-      if (w && !w.isDestroyed()) {
-        w.webContents.send("system-theme-changed", nativeTheme.shouldUseDarkColors);
-      }
-    });
-  });
-  app.on("activate", () => {
+// 单实例：保证整个系统只运行一个窗口；第二个实例启动时聚焦已有窗口
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
     showWindow();
   });
-});
+
+  app.whenReady().then(() => {
+    mainWindow = createWindow();
+    buildMenu(mainWindow);
+    createTray();
+    // 启动 5 秒后静默检查一次更新，之后每 6 小时一次
+    setTimeout(() => checkUpdate(false), 5000);
+    setInterval(() => checkUpdate(false), 6 * 60 * 60 * 1000);
+    // 系统深浅色变化时推送给渲染进程（跟随系统模式）
+    nativeTheme.on("updated", () => {
+      [mainWindow, ...BrowserWindow.getAllWindows()].forEach(function (w) {
+        if (w && !w.isDestroyed()) {
+          w.webContents.send("system-theme-changed", nativeTheme.shouldUseDarkColors);
+        }
+      });
+    });
+    app.on("activate", () => {
+      showWindow();
+    });
+  });
+}
 
 app.on("before-quit", () => {
   app.isQuitting = true;

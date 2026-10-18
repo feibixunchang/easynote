@@ -366,6 +366,14 @@ body {
 }
 .preview-pane pre code { background: none; padding: 0; }
 .preview-pane a { color: var(--accent); }
+.preview-pane a[data-mdlink] { cursor: pointer; text-decoration: underline; }
+.preview-pane img.md-img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 0.5em 0;
+  display: block;
+  cursor: zoom-in;
+}
 .preview-pane hr { border: none; border-top: 1px solid var(--border-strong); margin: 1em 0; }
 
 .editor-empty {

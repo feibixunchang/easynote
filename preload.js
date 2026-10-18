@@ -19,6 +19,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openExternal: function (url) {
     return ipcRenderer.invoke("open-external", url);
   },
+  getClipboardText: function () {
+    return ipcRenderer.invoke("get-clipboard-text");
+  },
+  pickImage: function () {
+    return ipcRenderer.invoke("pick-image");
+  },
   onUpdateAvailable: function (cb) {
     ipcRenderer.on("update-available", function (_e, info) {
       cb(info);
