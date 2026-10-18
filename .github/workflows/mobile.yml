@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk "release/简易笔记-${{ github.ref_name }}-android.apk"
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk "release/easynote-${{ github.ref_name }}-android.apk"
           ls -lh release/
 
       - name: 上传产物
@@ -121,7 +121,7 @@ jobs:
             CODE_SIGN_ENTITLEMENTS=""
           mkdir -p build/Payload
           cp -R "build/App.xcarchive/Products/Applications/App.app" build/Payload/
-          (cd build && zip -qry "简易笔记-${{ github.ref_name }}-ios-unsigned.ipa" Payload)
+          (cd build && zip -qry "easynote-${{ github.ref_name }}-ios-unsigned.ipa" Payload)
           ls -lh build/*.ipa
 
       - name: 上传产物
@@ -168,8 +168,8 @@ jobs:
 
             | 平台 | 文件 | 安装方式 |
             | --- | --- | --- |
-            | 🤖 Android | `*-android.apk` | 下载后用手机打开，允许"安装未知应用"即可（无需 Play 商店） |
-            | 🍎 iOS | `*-ios-unsigned.ipa`（可能没有） | 未签名 IPA，iPhone 不能直接装，见下方说明 |
+            | 🤖 Android | `easynote-*-android.apk` | 下载后用手机打开，允许"安装未知应用"即可（无需 Play 商店） |
+            | 🍎 iOS | `easynote-*-ios-unsigned.ipa`（可能没有） | 未签名 IPA，iPhone 不能直接装，见下方说明 |
 
             ### 🍎 iOS 未签名 IPA 安装说明（三选一）
 
