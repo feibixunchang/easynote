@@ -11,6 +11,9 @@
   var TOKEN_KEY = "simplenote_zh_token";
   var USER_KEY = "simplenote_zh_user";
   var PURGE_KEY = "simplenote_zh_purged"; // 已永久删除的笔记 ID（墓碑，防止同步时被还原）
+  var SINCE_KEY = "simplenote_zh_since";   // 增量同步游标：上次见过的服务端时间
+  var PUSHED_KEY = "simplenote_zh_pushed"; // 各笔记"已成功同步时的修改时间"，用于增量推送
+  var TOTAL_KEY = "simplenote_zh_total";   // 上次已知的服务端笔记总数（检测数据丢失）
   var DAV_KEY = "simplenote_zh_webdav";
   var IMGMODE_KEY = "simplenote_zh_imgmode"; // embed | path（插入图片的方式）
   // 纯浏览器环境（无 Electron）下的回退字体清单（均为 Windows 常见中文字体）
@@ -82,6 +85,10 @@
     serverUrl: "http://localhost:3000",
     lastSyncTs: 0,
     purged: [], // 永久删除的笔记 ID 墓碑
+    since: 0,        // 增量拉取游标（服务端时间）
+    pushed: {},      // 笔记 ID → 已成功同步时的修改时间（增量推送）
+    serverTotal: 0,  // 上次已知的服务端笔记总数（变小则疑似数据丢失）
+    legacyServer: false, // 服务端不支持增量（不返回 serverTime）
     dav: { server: "", username: "", password: "", dir: "/easynote" },
     imageMode: "embed", // 'embed' 内嵌进笔记 | 'path' 引用原文件路径
   };
@@ -118,6 +125,15 @@
     } catch (e) {
       state.purged = [];
     }
+    // 增量同步游标（老版本没有这些键，默认 0 = 首次全量同步）
+    state.since = parseInt(store.getItem(SINCE_KEY) || "0", 10) || 0;
+    state.serverTotal = parseInt(store.getItem(TOTAL_KEY) || "0", 10) || 0;
+    try {
+      state.pushed = JSON.parse(store.getItem(PUSHED_KEY)) || {};
+      if (!state.pushed || typeof state.pushed !== "object") state.pushed = {};
+    } catch (e) {
+      state.pushed = {};
+    }
     try {
       var dav = JSON.parse(store.getItem(DAV_KEY));
       if (dav && typeof dav === "object") {
@@ -129,6 +145,7 @@
     } catch (e) {}
     applyTheme();
   }
+  var syncInFlight = false; // 是否有同步请求正在进行（防止并发）
   function save() {
     store.setItem(STORE_KEY, JSON.stringify(state.notes));
     if (state.token) scheduleSync();
@@ -564,10 +581,10 @@
         break;
       }
       case "trash":
-        note.deleted = true; note.deletedDate = Date.now(); note.pinned = false;
+        note.deleted = true; note.deletedDate = Date.now(); note.pinned = false; note.modifiedDate = Date.now();
         state.currentId = null; save(); render(); break;
       case "restore":
-        note.deleted = false; note.deletedDate = null; save(); render(); break;
+        note.deleted = false; note.deletedDate = null; note.modifiedDate = Date.now(); save(); render(); break;
       case "purge": {
         // 记入墓碑再删除：服务端若是合并同步，墓碑可防止笔记被还原
         if (state.purged.indexOf(note.id) === -1) {
@@ -979,22 +996,39 @@
       Object.keys(opts.headers).forEach(function (k) { headers[k] = opts.headers[k]; });
     }
     var url = getServerUrl() + path;
+    // 超时保护：请求挂起（网络黑洞 / 代理异常）时主动失败，避免卡住后续同步
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 60000) : null;
     return fetch(url, {
       method: opts.method || "GET",
       headers: headers,
       body: opts.body,
+      signal: controller ? controller.signal : undefined,
     }).then(function (r) {
       return r.text().then(function (txt) {
         var data = null;
         try { data = txt ? JSON.parse(txt) : null; } catch (e) {}
+        if (r.status === 413) {
+          // 内嵌图片较多时整批笔记可能好几 MB，老服务端默认只收 100kb
+          throw new Error("笔记内容过大，服务器拒绝接收（413）。请减少内嵌图片，或调大服务端请求体限制（见 server/README.md 的 BODY_LIMIT）");
+        }
         if (!r.ok) throw new Error((data && data.error) ? data.error : "服务器返回错误 (" + r.status + ")");
         return data || {};
       });
     }).catch(function (e) {
-      // 网络层失败（连不上/被拦截）时，把技术性的 "Failed to fetch" 换成可操作的中文提示
+      // 网络层失败（连不上/被拦截/超时）时，把技术性错误换成可操作的中文提示
+      if (e && e.name === "AbortError") {
+        throw new Error("连接服务器超时（60 秒无响应）。请检查服务端是否正常、网络是否稳定");
+      }
       if (e && e.message && /failed to fetch|load failed|networkerror/i.test(e.message)) {
         throw new Error("无法连接服务器 " + url + "。请检查：① 地址是否填对（填 IP:端口 即可，会自动补 http://）② 服务端是否已启动 ③ 本机与服务端是否在同一局域网");
       }
+      throw e;
+    }).then(function (res) {
+      if (timer) clearTimeout(timer);
+      return res;
+    }, function (e) {
+      if (timer) clearTimeout(timer);
       throw e;
     });
   }
@@ -1009,6 +1043,7 @@
       createdDate: n.createdDate || Date.now(),
       modifiedDate: n.modifiedDate || Date.now(),
       deletedDate: n.deletedDate || null,
+      storedAt: n.storedAt, // 服务端入库时间（同步响应里带回，服务端写入时会刷新）
     };
   }
   function setSyncStatus(txt) {
@@ -1050,6 +1085,8 @@
       store.setItem(TOKEN_KEY, res.token);
       store.setItem(USER_KEY, res.username);
       updateAccountUI();
+      resetSyncCursors(); // 新账号：全量推送本地 + 全量拉取
+      startPeriodicSync();
       return syncAll();
     }).then(function () {
       toast(isRegister ? "注册成功，已同步" : "登录成功，已同步");
@@ -1064,6 +1101,8 @@
     state.user = "";
     store.removeItem(TOKEN_KEY);
     store.removeItem(USER_KEY);
+    stopPeriodicSync();
+    resetSyncCursors();
     updateAccountUI();
     toast("已退出登录");
   }
@@ -1088,39 +1127,156 @@
       });
   }
   var syncTimer;
+  var periodicSyncTimer = null;
+  var SYNC_INTERVAL_MS = 3000;      // 近实时同步：每 3 秒一轮（增量响应通常只有百余字节）
+  var SYNC_DEBOUNCE_MS = 800;       // 本地改动后 0.8s 推送，接近"打完即同步"
+  var syncInFlight = false;         // 是否有同步请求正在进行（防止并发）
   function scheduleSync() {
     if (!state.token) return;
     clearTimeout(syncTimer);
-    syncTimer = setTimeout(syncAll, 1500);
+    syncTimer = setTimeout(syncAll, SYNC_DEBOUNCE_MS);
+  }
+  // 拉取合并：服务端版本更新则采用服务端的；本地修改更新则保留本地。
+  // 返回是否有实际变更（决定是否需要重存/重渲染，避免每 3 秒无意义地全量重写）。
+  function mergeNotes(incoming) {
+    var byId = {};
+    state.notes.forEach(function (n) { if (n && n.id) byId[n.id] = n; });
+    var changed = false;
+    (incoming || []).forEach(function (n) {
+      if (!n || !n.id) return;
+      var loc = byId[n.id];
+      if (!loc) { byId[n.id] = n; changed = true; return; }
+      if ((n.modifiedDate || 0) > (loc.modifiedDate || 0)) { byId[n.id] = n; changed = true; }
+    });
+    state.notes = Object.keys(byId).map(function (k) { return byId[k]; });
+    return changed;
+  }
+  // 尚未成功推送的笔记（按各笔记"上次同步时的修改时间"判断，不受多设备时钟差异影响）
+  function notesToPush() {
+    return state.notes.filter(function (n) {
+      var p = state.pushed[n.id];
+      return !p || (n.modifiedDate || 0) > p;
+    });
+  }
+  // 一次成功同步后，记录各笔记"已确认在服务端"的修改时间。
+  // 只确认两类：① 本轮真正推上去的（且推送后没有被再次编辑）② 响应增量里回来的。
+  // 推送过程中用户新改的笔记保持未确认状态，下一轮自动补推——防止"改完丢同步"。
+  function markPushedAfterRound(pushedPayload, confirmed) {
+    var next = {};
+    state.notes.forEach(function (n) {
+      if (!n || !n.id) return;
+      var payloadTs = pushedPayload[n.id];
+      if (confirmed && confirmed[n.id] !== undefined) {
+        next[n.id] = confirmed[n.id]; // 服务端确认的版本（可能是别的设备更新的版本）
+      } else if (payloadTs !== undefined && (n.modifiedDate || 0) <= payloadTs) {
+        next[n.id] = payloadTs; // 本轮推上去的，且推送期间没有新编辑
+      } else {
+        next[n.id] = state.pushed[n.id] || 0; // 保持原状（可能仍待推送）
+      }
+    });
+    state.pushed = next;
+    store.setItem(PUSHED_KEY, JSON.stringify(next));
+  }
+  // 应用一次同步响应：合并增量、推进游标、检测服务端数据是否疑似丢失
+  // 返回 { shrink: 是否疑似数据丢失, changed: 本地是否被服务端更新, confirmed: 响应确认的笔记修改时间 }
+  function applySyncResponse(res) {
+    var changed = false;
+    var confirmed = {};
+    if (res && res.notes) {
+      (res.notes || []).forEach(function (n) { if (n && n.id) confirmed[n.id] = n.modifiedDate || 0; });
+      changed = mergeNotes(res.notes);
+      if (changed) filterPurged(); // 服务端若仍保留已永久删除的笔记，本地用墓碑过滤掉
+    }
+    if (res && typeof res.serverTime === "number" && res.serverTime > 0) {
+      state.since = res.serverTime;
+      store.setItem(SINCE_KEY, String(state.since));
+      if (state.legacyServer) { state.legacyServer = false; startPeriodicSync(); }
+    } else {
+      // 老服务端不返回 serverTime：退化为全量轮询（间隔拉长，避免反复拉全量）
+      if (!state.legacyServer) { state.legacyServer = true; startPeriodicSync(); }
+    }
+    if (res && typeof res.total === "number") {
+      if (state.serverTotal > 0 && res.total < state.serverTotal) {
+        // 服务端笔记数变少（数据文件丢失/被旧备份覆盖）：全量拉回并全量重推，尽量恢复
+        state.since = 0; store.setItem(SINCE_KEY, "0");
+        state.pushed = {}; store.setItem(PUSHED_KEY, "{}");
+        state.serverTotal = res.total; store.setItem(TOTAL_KEY, String(res.total));
+        return { shrink: true, changed: changed, confirmed: confirmed };
+      }
+      state.serverTotal = res.total;
+      store.setItem(TOTAL_KEY, String(res.total));
+    }
+    return { shrink: false, changed: changed, confirmed: confirmed };
+  }
+  function startPeriodicSync() {
+    stopPeriodicSync();
+    if (!state.token) return;
+    // 增量推送 + 增量拉取合一：没有改动时请求体只有几十字节；老服务端退化为 30s 全量轮询
+    periodicSyncTimer = setInterval(function () {
+      if (!state.token || syncInFlight) return;
+      syncAll();
+    }, state.legacyServer ? SYNC_INTERVAL_MS * 10 : SYNC_INTERVAL_MS);
+  }
+  function stopPeriodicSync() {
+    if (periodicSyncTimer) { clearInterval(periodicSyncTimer); periodicSyncTimer = null; }
   }
   function syncAll() {
     if (!state.token) return Promise.resolve();
-    setSyncStatus("同步中…");
-    var payload = { notes: state.notes.map(serializeNote) };
-    return api("/api/notes/sync", { method: "POST", body: JSON.stringify(payload) })
+    if (syncInFlight) return Promise.resolve(); // 上一轮还没回来，跳过本轮
+    syncInFlight = true;
+    var pending = notesToPush().map(serializeNote);
+    var pushedPayload = {}; // 本轮真正推上去的笔记及其修改时间
+    pending.forEach(function (n) { pushedPayload[n.id] = n.modifiedDate || 0; });
+    if (pending.length) setSyncStatus("同步中…");
+    return api("/api/notes/sync", {
+      method: "POST",
+      body: JSON.stringify({ notes: pending, since: state.since || 0 }),
+    })
       .then(function (res) {
-        if (res && res.notes) {
-          state.notes = res.notes;
-          filterPurged(); // 服务端若仍保留已永久删除的笔记，本地用墓碑过滤掉
-          saveLocalOnly();
-          render();
+        var r = applySyncResponse(res);
+        if (!r.shrink) {
+          if (r.changed) { saveLocalOnly(); render(); } // 有其他设备的改动才重存/重渲染
+          if (pending.length || r.changed) {
+            markPushedAfterRound(pushedPayload, r.confirmed);
+            updateImgFixStatus(); // 同步后重新检测外链图片
+          }
+          state.lastSyncTs = Date.now();
+          setSyncStatus("已同步 · " + new Date().toLocaleTimeString("zh-CN"));
         }
-        state.lastSyncTs = Date.now();
-        setSyncStatus("已同步 · " + new Date().toLocaleTimeString("zh-CN"));
-        updateImgFixStatus(); // 同步后重新检测外链图片
-        return res;
+        return r.shrink;
       })
       .catch(function (e) {
         setSyncStatus("同步失败：" + e.message);
+        return false;
+      })
+      .then(function (shrink) {
+        syncInFlight = false;
+        if (shrink) recoverFromShrink();
       });
   }
-  function pullOnly() {
-    return api("/api/notes", { method: "GET" }).then(function (res) {
-      if (res && res.notes) {
-        state.notes = res.notes;
-        filterPurged();
-      }
+  // 服务端疑似数据丢失后的恢复：全量拉回 → 全量重推
+  function recoverFromShrink() {
+    pullOnly(true).then(function () { syncAll(); });
+  }
+  function pullOnly(forceFull) {
+    // 游标是服务端时间（响应里的 serverTime），无需回退；服务端按"入库时间"过滤
+    var since = forceFull ? 0 : (state.since || 0);
+    return api("/api/notes?since=" + since, { method: "GET" }).then(function (res) {
+      var r = applySyncResponse(res);
+      if (!r.shrink && r.changed) markPushedAfterRound({}, r.confirmed);
+      if (r.shrink) recoverFromShrink();
+      return res;
     });
+  }
+  // 切换账号 / 退出登录时重置同步游标，避免把上个账号的增量状态带到新账号
+  function resetSyncCursors() {
+    state.since = 0;
+    state.pushed = {};
+    state.serverTotal = 0;
+    state.legacyServer = false;
+    store.setItem(SINCE_KEY, "0");
+    store.setItem(PUSHED_KEY, "{}");
+    store.setItem(TOTAL_KEY, "0");
   }
 
   /* ---------------- WebDAV 导出 ---------------- */
@@ -1467,7 +1623,9 @@
       updateImgFixStatus();
       var msg = "已修复 " + fixedFiles + " 张图片（" + replaced + " 处引用已内嵌，同步后其他设备即可显示）";
       var missing = found.paths.length - fixedFiles;
-      if (missing > 0) msg += "；另有 " + missing + " 张在本机找不到原文件，未能修复";
+      if (missing > 0) {
+        msg += "；另有 " + missing + " 张在本机找不到原文件，未能修复——请到存有这些图片的电脑上打开简易笔记，重新点「一键修复」并同步";
+      }
       toast(msg);
     }).catch(function () {
       toast("修复失败，请重试");
@@ -1578,20 +1736,12 @@
       });
     }
     if (state.token) {
-      setSyncStatus("同步中…");
-      pullOnly()
-        .then(function () {
-          if (state.notes.length === 0) seedIfEmpty();
-          saveLocalOnly();
-          render();
-          updateImgFixStatus(); // 同步拉取后重新检测外链图片
-          setSyncStatus("已同步 · " + new Date().toLocaleTimeString("zh-CN"));
-        })
-        .catch(function () {
-          seedIfEmpty();
-          render();
-          setSyncStatus("离线（本地可用）");
-        });
+      render(); // 先把本地笔记显示出来，再同步
+      // 启动即同步：推送本地未同步的修改，并拉取其他设备的增量改动
+      syncAll().then(function () {
+        if (state.notes.length === 0) { seedIfEmpty(); saveLocalOnly(); render(); }
+      });
+      startPeriodicSync(); // 每 3 秒一轮增量同步，其它设备保存后本机随即显示
     } else {
       seedIfEmpty();
       render();

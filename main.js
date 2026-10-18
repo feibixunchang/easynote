@@ -109,6 +109,9 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      // 关掉后台定时器 throttling：缩到托盘 / 窗口被遮挡时，定时同步照常运行，
+      // 保证多端"近实时同步"的体验不中断
+      backgroundThrottling: false,
       preload: path.join(__dirname, "preload.js"),
     },
   });
