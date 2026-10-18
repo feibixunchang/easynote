@@ -170,5 +170,5 @@ jobs:
             - 首个移动端版本：笔记/回收站/标签/颜色/置顶/搜索/Markdown 预览/插入图片（拍照、相册）/链接/导出备份，与桌面端一致
             - 手机优先的单栏界面，平板/折叠屏自动切换双栏；深色模式、安全区适配
             - 登录后每 3 秒增量同步，其他设备的修改自动显示
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
