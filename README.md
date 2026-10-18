@@ -39,8 +39,8 @@
 | 🍎 macOS（Intel + Apple 芯片通用） | `easynote-<版本>.dmg` | 打开 dmg，把「简易笔记」拖进「应用程序」 |
 | 🪟 Windows | `easynote-Setup-<版本>.exe` | 双击安装向导安装 |
 | 🐧 Linux | `easynote-<版本>-x86_64.AppImage` / `easynote-<版本>-amd64.deb` | AppImage 加可执行权限即可运行；deb 用 `sudo dpkg -i` 安装 |
-| 🤖 Android | `简易笔记-mobile-v<版本>-android.apk` | 下载后用手机打开，允许「安装未知应用」即可 |
-| 🍎 iOS | `简易笔记-mobile-v<版本>-ios-unsigned.ipa` | 未签名 IPA，需在 Mac 上重签名或侧载，见 [移动端说明](#-移动端ios--android) |
+| 🤖 Android | `easynote-mobile-v<版本>-android.apk` | 下载后用手机打开，允许「安装未知应用」即可 |
+| 🍎 iOS | `easynote-mobile-v<版本>-ios-unsigned.ipa` | 未签名 IPA，需在 Mac 上重签名或侧载，见 [移动端说明](#-移动端ios--android) |
 
 > 桌面端最新版：<https://github.com/feibixunchang/easynote/releases/latest>
 > 移动端版本：<https://github.com/feibixunchang/easynote/releases>（找 `mobile-v*` 标签的 Release）
