@@ -23,7 +23,7 @@
   var TOTAL_KEY = "simplenote_zh_total";
   var DAV_KEY = "simplenote_zh_webdav";
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.2";
+  var APP_VERSION = "1.0.3";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -207,13 +207,17 @@
     var sb = plugin("StatusBar");
     if (sb && sb.setStyle) {
       try {
-        // 关键：让 WebView 延伸到状态栏之下。延伸后，「时间 / 信号 / WiFi / 电量」
-        // 那一行的底色由页面自己的 .appbar（带 env(safe-area-inset-top) 内边距、
-        // 背景为 --bg）来画，因此永远和主页面同色。
-        // 反之若不延伸，那一行是系统/容器绘制的，CSS 再怎么改都压不动 → 出现灰条。
-        if (sb.setOverlaysWebView) sb.setOverlaysWebView({ overlay: true });
+        // 关键一：先关再开 overlay。
+        // 原生插件在 setOverlaysWebView 里有一条 `if (overlay == isOverlayingWebview) return;`
+        // 的短路——若本来就处于 overlay 状态，单次调用会被直接跳过，WebView 的 frame
+        // 也不会被重算，结果就是页面停在状态栏下方、那一行露出原生窗口底色（灰的）。
+        // 先切 false 再切 true，能强制走一遍 resizeWebView()，把 WebView 真正铺到屏幕顶端。
+        if (sb.setOverlaysWebView) {
+          sb.setOverlaysWebView({ overlay: false });
+          sb.setOverlaysWebView({ overlay: true });
+        }
         sb.setStyle({ style: dark ? "DARK" : "LIGHT" });
-        // 兜底：个别机型 overlay 未生效时，让原生底色也跟随主题，避免出现色差
+        // 兜底：万一 overlay 仍被系统干涉，让原生底色也跟随主题
         sb.setBackgroundColor({ color: dark ? "#101216" : "#ffffff" });
       } catch (e) {}
     }
@@ -660,8 +664,6 @@
 
   function renderAll() {
     document.body.setAttribute("data-view", state.view);
-    el.listTitle.textContent = state.view === "trash" ? "回收站" :
-      (state.activeTag ? "#" + state.activeTag : "全部笔记");
     // 顶栏标题跟随当前列表（Simplenote 那样一眼看清在哪个列表里）
     if (el.appbarTitle) {
       el.appbarTitle.textContent = state.view === "trash" ? "回收站" :
@@ -686,8 +688,6 @@
   // 切换视图时只刷新列表相关 UI（避免每次全量 renderAll 造成的卡顿 / 生硬）
   function refreshListView() {
     document.body.setAttribute("data-view", state.view);
-    el.listTitle.textContent = state.view === "trash" ? "回收站" :
-      (state.activeTag ? "#" + state.activeTag : "全部笔记");
     // 顶栏标题跟随当前列表（Simplenote 那样一眼看清在哪个列表里）
     if (el.appbarTitle) {
       el.appbarTitle.textContent = state.view === "trash" ? "回收站" :

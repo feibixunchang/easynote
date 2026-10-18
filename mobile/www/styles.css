@@ -126,6 +126,11 @@ body[data-screen="settings"] #screenSettings { display: flex; }
   font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.2px;
+  /* 标题变长（比如切到某个标签）时截断，不要把右侧按钮挤出去 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .version-pill {
@@ -165,6 +170,9 @@ body[data-screen="settings"] #screenSettings { display: flex; }
   border-radius: 10px;
   cursor: pointer;
   min-height: 36px;
+  /* 不允许换行：「清空 🗑」这种带表情的按钮被挤到第二行会显得很乱 */
+  white-space: nowrap;
+  flex: none;
 }
 
 /* 搜索行 */
@@ -187,12 +195,12 @@ body[data-screen="settings"] #screenSettings { display: flex; }
   font-size: 15px;
 }
 
-/* 状态行：同步 pill + 标题 + 排序 */
+/* 状态行：同步状态 + 右侧动作（标题已移到顶栏，不再重复占位） */
 .status-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 2px 12px 8px 14px;
+  gap: 6px;
+  padding: 2px 10px 8px 14px;
 }
 
 .sync-pill {
@@ -294,7 +302,11 @@ body.dark .sync-pill.ok { color: #4ade80; }
   user-select: none;
 }
 .note-card:active { background: var(--surface2); }
-.note-card.selected { outline: 2px solid var(--accent); }
+/* 选中态：与桌面端一致用「淡蓝填充」表示，而不是只描一圈边（描边看起来像没铺满） */
+.note-card.selected {
+  background: rgba(58, 122, 254, 0.12);
+  border-color: var(--accent);
+}
 
 .card-top { display: flex; align-items: baseline; gap: 7px; }
 .color-dot {
