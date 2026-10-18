@@ -1,17 +1,26 @@
-name: 简易笔记 · 三端打包
+name: 简易笔记 · 三端打包发布
 
-# 在云端分别用 Windows / macOS / Linux runner 打包，产出三个平台的安装包。
-# 用法：push 一个以 v 开头的 tag（如 v1.1.0）即可自动构建并上传产物（Artifacts）。
-# 产物在 GitHub 仓库的 Actions → 对应运行 → Artifacts 中下载。
+# 在云端分别用 Windows / macOS / Linux runner 打包，产出三个平台的安装包，
+# 最后统一聚合成一个 GitHub Release（含 Mac / Win / Linux 三个安装包）。
+#
+# 用法：在本地推送一个以 v 开头的 tag（如 v1.2.1）即可自动构建并发布。
+#   git tag v1.2.1 && git push origin v1.2.1
+#
+# 说明：
+#   - macOS 在云端没有苹果开发者证书，产物为 ad-hoc 签名，下载后首次打开需
+#     右键「打开」一次以绕过 Gatekeeper；本机亲手打包（build-mac-local.sh）则无此限制。
+#   - Windows / Linux 为正常发行包。
+
 on:
   push:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -25,33 +34,78 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
       - name: 安装依赖
         run: npm ci
+
       - name: 安装 macOS 打包必需的原生模块 dmg-license
         if: matrix.os == 'macos-latest'
         run: npm install dmg-license
+
       - name: 安装 Linux 系统依赖（打包 deb/rpm 需要）
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg rpm
-      - name: 打包并发布到 GitHub Release
+
+      - name: 打包（仅构建，不自动发布；macOS 强制 ad-hoc 签名）
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run ${{ matrix.script }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run ${{ matrix.script }} -- --publish never
+
       - name: 收集安装包
         shell: bash
         run: |
           mkdir -p release
-          cp dist/*.exe release/ 2>/dev/null || true
-          cp dist/*.dmg release/ 2>/dev/null || true
-          cp dist/*.AppImage release/ 2>/dev/null || true
-          cp dist/*.deb release/ 2>/dev/null || true
-          cp dist/*.rpm release/ 2>/dev/null || true
+          cp dist/*.exe        release/ 2>/dev/null || true
+          cp dist/*.dmg        release/ 2>/dev/null || true
+          cp dist/*.AppImage   release/ 2>/dev/null || true
+          cp dist/*.deb        release/ 2>/dev/null || true
+          cp dist/*.rpm        release/ 2>/dev/null || true
+          cp dist/*.zip        release/ 2>/dev/null || true
           ls -lh release/
+
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: 简易笔记-${{ matrix.os }}
           path: release/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+          merge-multiple: true
+
+      - name: 列出产物
+        run: ls -lh all-artifacts/
+
+      - name: 发布 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 简易笔记 ${{ github.ref_name }}
+          files: all-artifacts/*
+          body: |
+            ## 简易笔记 ${{ github.ref_name }}
+
+            | 平台 | 文件 | 说明 |
+            | --- | --- | --- |
+            | 🍎 macOS | `*.dmg` | 通用包，Intel / Apple 芯片均可；首次打开请右键「打开」 |
+            | 🪟 Windows | `*.exe` | NSIS 安装包 |
+            | 🐧 Linux | `*.AppImage` / `*.deb` | AppImage 免安装 / deb 包 |
+
+            ### 更新内容
+            - **单实例**：每台电脑系统只允许运行一个窗口，重复打开会聚焦已有窗口。
+            - **修复右键「粘贴」**：改为经主进程读取系统剪贴板，解决从别处复制无法粘贴的问题。
+            - **新增插入能力**：可插入文本（引用/代码/分隔线/日期）、插入图片、插入链接（点击链接用默认浏览器打开）。
+            - **macOS 托盘图标**：改为纯白笔记本样式（模板图），与其他菜单栏图标风格一致。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

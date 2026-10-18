@@ -1,6 +1,6 @@
 {
   "name": "easynote",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "高度还原 Simplenote 的纯中文笔记软件（支持云同步账号与 Windows/macOS/Linux 三端）",
   "main": "main.js",
   "author": "WorkBuddy",
@@ -8,11 +8,11 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist:win": "electron-builder --win --x64 --publish always",
-    "dist:mac": "electron-builder --mac --universal --publish always",
+    "dist:win": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac --universal",
     "dist:mac:local": "electron-builder --mac --universal --publish never",
-    "dist:linux": "electron-builder --linux --x64 --publish always",
-    "dist:all": "electron-builder --win --mac --linux --publish always"
+    "dist:linux": "electron-builder --linux --x64",
+    "dist:all": "electron-builder --win --mac --linux"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -23,6 +23,7 @@
     "productName": "简易笔记",
     "copyright": "Copyright © 2026 WorkBuddy",
     "icon": "build/icon.png",
+    "asar": false,
     "files": [
       "index.html",
       "styles.css",
