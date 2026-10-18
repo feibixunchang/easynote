@@ -1,6 +1,6 @@
 {
   "name": "easynote",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "高度还原 Simplenote 的纯中文笔记软件（支持云同步账号与 Windows/macOS/Linux 三端）",
   "main": "main.js",
   "author": "WorkBuddy",
@@ -32,7 +32,8 @@
       "preload.js",
       "build/icon.png",
       "build/icons/**",
-      "build/afterSign.js"
+      "build/afterSign.js",
+      "!node_modules/**"
     ],
     "afterSign": "./build/afterSign.js",
     "win": {
@@ -75,5 +76,8 @@
       "category": "Utility",
       "maintainer": "WorkBuddy"
     }
+  },
+  "dependencies": {
+    "dmg-license": "^1.0.11"
   }
 }
