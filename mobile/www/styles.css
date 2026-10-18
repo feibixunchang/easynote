@@ -90,6 +90,11 @@ button, input, select, textarea {
 .screen {
   display: none;
   flex-direction: column;
+  /* 关键：.panes 是 flex 容器，屏幕作为 flex 子项必须显式撑满。
+     只写 min-width/height 时宽度是"按内容撑开"的（flex-basis:auto），
+     内容一窄（比如状态行按钮变少）整屏就会缩到左边、右侧留白。 */
+  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
   min-height: 0;
   background: var(--bg);

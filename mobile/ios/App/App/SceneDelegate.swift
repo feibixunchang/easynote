@@ -34,7 +34,30 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             }
         }
 
+        // 兜底：系统有时会在状态栏位置盖一层毛玻璃（UIVisualEffectView），
+        // 表现为「页面是白的、状态栏那一行是灰的，改 CSS 无效」。
+        // 这里把顶部薄薄一条里的模糊视图隐藏掉（只动高度很小、贴顶的那种）。
+        for delay in [0.4, 1.2, 2.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let win = self?.window else { return }
+                SceneDelegate.hideTopBlurViews(in: win)
+            }
+        }
+
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
+    }
+
+    /// 递归隐藏「贴顶且很薄」的毛玻璃视图（状态栏那层系统材质），其它模糊背景不动。
+    static func hideTopBlurViews(in view: UIView) {
+        for sub in view.subviews {
+            if sub is UIVisualEffectView {
+                let f = sub.frame
+                if f.minY <= 1, f.height > 0, f.height <= 160 {
+                    sub.isHidden = true
+                }
+            }
+            hideTopBlurViews(in: sub)
+        }
     }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {

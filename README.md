@@ -88,7 +88,7 @@ CI 没有苹果开发者证书，产物是 **ad-hoc 签名**。从浏览器下�
   - 完整截图级步骤见 **[xcode-tutorial.html](./xcode-tutorial.html)**。
   - 不想装 Xcode 的备选：**AltStore / Sideloadly 侧载**——下载 Release 里的 `easynote-mobile-v*-ios-unsigned.ipa` 用工具导入并签名（详见 [sideloadly-tutorial.html](./sideloadly-tutorial.html)，注意 2FA 需用应用专用密码）。
 
-> 移动端版本号独立计数：桌面端 tag 为 `v1.2.10`，移动端 tag 为 `mobile-v1.0.5`。
+> 移动端版本号独立计数：桌面端 tag 为 `v1.2.10`，移动端 tag 为 `mobile-v1.0.6`。
 > 两边更新检查只认自己的标签，互不打扰。
 
 ## 🔔 更新提示
