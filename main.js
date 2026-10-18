@@ -437,6 +437,31 @@ const MIME_BY_EXT = {
   ".heic": "image/heic",
 };
 
+// 本地图片文件 → data: URI（必要时等比缩小，最长边 ≤ 1600px）。
+// pick-image（内嵌模式）与 embed-image-paths（外链图片迁移）共用。
+// 返回 null 表示读取/解码失败（文件不存在或不是图片）。
+function fileToDataUrl(p) {
+  try {
+    const buf = fs.readFileSync(p);
+    let img = nativeImage.createFromBuffer(buf);
+    if (img.isEmpty()) {
+      // 个别格式（如 heic）nativeImage 解码失败，直接以原始字节内嵌
+      const mime = MIME_BY_EXT[path.extname(p).toLowerCase()] || "image/png";
+      return "data:" + mime + ";base64," + buf.toString("base64");
+    }
+    const s = img.getSize();
+    const MAX = 1600;
+    const longest = Math.max(s.width, s.height);
+    if (longest > MAX) {
+      const f = MAX / longest;
+      img = img.resize({ width: Math.round(s.width * f), height: Math.round(s.height * f) });
+    }
+    return img.toDataURL();
+  } catch (e) {
+    return null;
+  }
+}
+
 // 弹出系统文件选择框，挑选要插入的图片。
 // mode = "path" 时只返回 { name, path }（不读文件、不转码，笔记里存引用）；
 // mode = "embed"（默认）时额外返回 { dataUrl }（必要时等比缩小后内嵌 base64）。
@@ -456,30 +481,26 @@ ipcMain.handle("pick-image", function (_e, mode) {
       const name = path.basename(p);
       // 引用路径模式：只给路径，渲染端拼 file:// 存入笔记
       if (mode === "path") return { name: name, path: p };
-      try {
-        const buf = fs.readFileSync(p);
-        let img = nativeImage.createFromBuffer(buf);
-        if (img.isEmpty()) {
-          // 个别格式（如 heic）nativeImage 解码失败，直接以原始字节内嵌
-          const mime = MIME_BY_EXT[path.extname(p).toLowerCase()] || "image/png";
-          return { name: name, path: p, dataUrl: "data:" + mime + ";base64," + buf.toString("base64") };
-        }
-        // 过大则等比缩小，控制笔记体积（最长边 ≤ 1600px）
-        const s = img.getSize();
-        const MAX = 1600;
-        const longest = Math.max(s.width, s.height);
-        if (longest > MAX) {
-          const f = MAX / longest;
-          img = img.resize({ width: Math.round(s.width * f), height: Math.round(s.height * f) });
-        }
-        return { name: name, path: p, dataUrl: img.toDataURL() };
-      } catch (e) {
-        return null;
-      }
+      const dataUrl = fileToDataUrl(p);
+      if (!dataUrl) return null;
+      return { name: name, path: p, dataUrl: dataUrl };
     })
     .catch(function () {
       return null;
     });
+});
+
+// 把一批本地图片路径批量转成 data: URI（「外链图片转内嵌」用）。
+// 入参：绝对路径数组；返回：{ "<路径>": "data:...", ... }（读取失败的路径不在结果里）。
+ipcMain.handle("embed-image-paths", function (_e, paths) {
+  const out = {};
+  if (!Array.isArray(paths)) return out;
+  for (const p of paths) {
+    if (typeof p !== "string" || !p) continue;
+    const dataUrl = fileToDataUrl(p);
+    if (dataUrl) out[p] = dataUrl;
+  }
+  return out;
 });
 
 // 「引用文件路径」模式的图片显示：渲染端把 markdown 里的 file:// 改写为

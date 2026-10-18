@@ -324,6 +324,12 @@
     el.linkText = document.getElementById("linkText");
     el.linkConfirm = document.getElementById("linkConfirm");
     el.linkCancel = document.getElementById("linkCancel");
+    el.imgFixBanner = document.getElementById("imgFixBanner");
+    el.imgFixText = document.getElementById("imgFixText");
+    el.imgFixBtn = document.getElementById("imgFixBtn");
+    el.imgFixDismissBtn = document.getElementById("imgFixDismissBtn");
+    el.btnEmbedImages = document.getElementById("btnEmbedImages");
+    el.imgFixStatus = document.getElementById("imgFixStatus");
     el.navSettings = document.getElementById("navSettings");
     el.settingsModal = document.getElementById("settingsModal");
     el.settingsClose = document.getElementById("settingsClose");
@@ -810,6 +816,11 @@
     if (el.linkModal) el.linkModal.addEventListener("click", function (e) {
       if (e.target === el.linkModal) closeLinkModal();
     });
+    if (el.imgFixBtn) el.imgFixBtn.addEventListener("click", embedExternalImages);
+    if (el.btnEmbedImages) el.btnEmbedImages.addEventListener("click", embedExternalImages);
+    if (el.imgFixDismissBtn) el.imgFixDismissBtn.addEventListener("click", function () {
+      el.imgFixBanner.hidden = true;
+    });
     if (el.linkUrl) el.linkUrl.addEventListener("keydown", function (e) {
       if (e.key === "Enter") { e.preventDefault(); confirmLink(); }
     });
@@ -901,6 +912,7 @@
   function openSettings() {
     if (el.themeModeSelect) el.themeModeSelect.value = state.themeMode;
     if (el.imageModeSelect) el.imageModeSelect.value = state.imageMode;
+    updateImgFixStatus();
     if (el.davUrl) el.davUrl.value = state.dav.server || "";
     if (el.davUser) el.davUser.value = state.dav.username || "";
     if (el.davPass) el.davPass.value = state.dav.password || "";
@@ -1095,6 +1107,7 @@
         }
         state.lastSyncTs = Date.now();
         setSyncStatus("已同步 · " + new Date().toLocaleTimeString("zh-CN"));
+        updateImgFixStatus(); // 同步后重新检测外链图片
         return res;
       })
       .catch(function (e) {
@@ -1390,6 +1403,99 @@
     el.linkModal.hidden = true;
   }
 
+  /* ---------------- 外链图片一键转内嵌（修复跨设备看不到图） ----------------
+   * 早期版本 / 「引用路径」模式下，图片在笔记里存的是 file:// 或
+   * easynote-file:// 本机路径：只有保存图片的那台电脑能显示，同步到
+   * Windows / Linux 后对方读不到你机器的文件，图片就不显示。
+   * 这里把本机还能找到原图的引用批量转成 data: URI 内嵌，
+   * 保存并同步后，所有设备都能显示。 */
+  var EXTERNAL_IMG_RE = /!\[[^\]]*\]\((?:file|easynote-file):\/\/[^)\s]+\)/g;
+
+  // file:// / easynote-file:// URL → 本地绝对路径
+  function urlToLocalPath(u) {
+    var s = String(u || "");
+    s = s.replace(/^easynote-file:\/\//i, "").replace(/^file:\/\//i, "");
+    try { s = decodeURIComponent(s); } catch (e) {}
+    if (/^\/[a-zA-Z]:/.test(s)) s = s.slice(1); // Windows: /C:/x → C:/x
+    return s;
+  }
+
+  // 扫描全部笔记里的外链图片引用，返回 { paths, noteCount, refCount }
+  function collectExternalImages() {
+    var paths = {};
+    var noteCount = 0, refCount = 0;
+    state.notes.forEach(function (n) {
+      if (!n || n.deleted) return;
+      var c = n.content || "";
+      var m, has = false;
+      EXTERNAL_IMG_RE.lastIndex = 0;
+      while ((m = EXTERNAL_IMG_RE.exec(c)) !== null) {
+        var inner = /\(((?:file|easynote-file):\/\/[^)\s]+)\)/.exec(m[0]);
+        var p = inner ? urlToLocalPath(inner[1]) : "";
+        if (p) { paths[p] = true; refCount++; has = true; }
+      }
+      if (has) noteCount++;
+    });
+    return { paths: Object.keys(paths), noteCount: noteCount, refCount: refCount };
+  }
+
+  function embedExternalImages() {
+    var api = window.electronAPI;
+    if (!api || !api.embedImagePaths) { toast("当前环境不支持该操作"); return; }
+    var found = collectExternalImages();
+    if (!found.paths.length) { toast("没有需要修复的外链图片"); updateImgFixStatus(); return; }
+    if (el.btnEmbedImages) el.btnEmbedImages.disabled = true;
+    toast("正在修复 " + found.refCount + " 处外链图片…");
+    api.embedImagePaths(found.paths).then(function (map) {
+      map = map || {};
+      var fixedFiles = Object.keys(map).length;
+      var replaced = 0;
+      state.notes.forEach(function (n) {
+        if (!n || n.deleted) return;
+        var c = n.content || "";
+        var orig = c;
+        c = c.replace(EXTERNAL_IMG_RE, function (whole) {
+          var inner = /\(((?:file|easynote-file):\/\/[^)\s]+)\)/.exec(whole);
+          var p = inner ? urlToLocalPath(inner[1]) : "";
+          if (p && map[p]) { replaced++; return whole.replace(inner[1], map[p]); }
+          return whole;
+        });
+        if (c !== orig) { n.content = c; n.modifiedDate = Date.now(); }
+      });
+      save(); // 保存并触发同步：其他设备拉取后即可显示
+      render();
+      updateImgFixStatus();
+      var msg = "已修复 " + fixedFiles + " 张图片（" + replaced + " 处引用已内嵌，同步后其他设备即可显示）";
+      var missing = found.paths.length - fixedFiles;
+      if (missing > 0) msg += "；另有 " + missing + " 张在本机找不到原文件，未能修复";
+      toast(msg);
+    }).catch(function () {
+      toast("修复失败，请重试");
+    }).then(function () {
+      if (el.btnEmbedImages) el.btnEmbedImages.disabled = false;
+    });
+  }
+
+  // 刷新「外链图片」检测状态：设置弹窗里的说明 + 侧栏提示横幅
+  function updateImgFixStatus() {
+    var found = collectExternalImages();
+    if (el.imgFixStatus) {
+      el.imgFixStatus.textContent = found.refCount
+        ? "检测到 " + found.noteCount + " 条笔记中有 " + found.refCount + " 处外链图片（只在本机可见，换设备显示不了）。点「一键修复」把它们转成内嵌，保存同步后所有设备都能看。"
+        : "未检测到外链图片：当前笔记里的图片都已内嵌保存（或暂无图片）。";
+    }
+    if (el.imgFixBanner) {
+      if (found.refCount) {
+        if (el.imgFixText) {
+          el.imgFixText.textContent = "检测到 " + found.refCount + " 处外链图片，其他设备可能看不到，点「修复」";
+        }
+        el.imgFixBanner.hidden = false;
+      } else {
+        el.imgFixBanner.hidden = true;
+      }
+    }
+  }
+
   function formatDateTime(d) {
     function p(n) { return n < 10 ? "0" + n : "" + n; }
     return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
@@ -1478,6 +1584,7 @@
           if (state.notes.length === 0) seedIfEmpty();
           saveLocalOnly();
           render();
+          updateImgFixStatus(); // 同步拉取后重新检测外链图片
           setSyncStatus("已同步 · " + new Date().toLocaleTimeString("zh-CN"));
         })
         .catch(function () {
@@ -1489,6 +1596,8 @@
       seedIfEmpty();
       render();
     }
+    // 启动后延迟检测一次外链图片（避免阻塞首屏渲染）
+    setTimeout(updateImgFixStatus, 800);
     if (window.electronAPI && window.electronAPI.onMenuNewNote) {
       window.electronAPI.onMenuNewNote(function () {
         var b = document.getElementById("newNoteBtn");

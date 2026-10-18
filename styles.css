@@ -140,6 +140,13 @@ body {
   font-size: 14px;
   line-height: 1;
 }
+.update-actions button#imgFixDismissBtn {
+  background: transparent;
+  color: var(--accent);
+  padding: 3px 5px;
+  font-size: 14px;
+  line-height: 1;
+}
 
 .search-wrap { padding: 4px 14px 12px; }
 #search {

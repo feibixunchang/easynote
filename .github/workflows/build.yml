@@ -55,6 +55,45 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run ${{ matrix.script }} -- --publish never
 
+      # deb 硬链接自检（v1.2.5 及之前版本的 deb 在 Deepin 25 等系统上安装失败）：
+      # 若 deb 内 /opt 与 /usr/share/icons 下的同名图标共享 inode，打包器会写成
+      # 硬链接条目，dpkg 跨文件系统解包时报「Invalid cross-device link」。
+      # afterPack 钩子已从源头避免；这里再做「修复 + 发布前拦截」双保险。
+      - name: 修复并校验 deb 包（存在硬链接条目则拒绝发布）
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          debs=(dist/*.deb)
+          if [ ${#debs[@]} -eq 0 ]; then echo "没有 deb 产物，跳过"; exit 0; fi
+          for deb in "${debs[@]}"; do
+            echo "==== $deb ===="
+            listing=$(dpkg-deb --fsys-tarfile "$deb" | tar -tvf - 2>/dev/null)
+            if [ -z "$listing" ]; then
+              echo "::error::无法读取 $deb 的内容列表"; exit 1
+            fi
+            if echo "$listing" | grep -q '^h'; then
+              echo "发现硬链接条目，先修复再发布："
+              echo "$listing" | grep '^h'
+              tmp=$(mktemp -d)
+              # sudo 保持 root 属主；解开后把 nlink>1 的文件复制成独立 inode，重建即无硬链接条目
+              sudo dpkg-deb -R "$deb" "$tmp/pkg"
+              sudo find "$tmp/pkg" -type f -links +1 -print0 | while IFS= read -r -d '' f; do
+                sudo cp -p "$f" "$f.__unlink_tmp__" && sudo mv "$f.__unlink_tmp__" "$f"
+              done
+              sudo dpkg-deb -b "$tmp/pkg" "$tmp/out.deb"
+              sudo mv "$tmp/out.deb" "$deb"
+              sudo rm -rf "$tmp"
+            fi
+            listing2=$(dpkg-deb --fsys-tarfile "$deb" | tar -tvf - 2>/dev/null)
+            if echo "$listing2" | grep -q '^h'; then
+              echo "::error::$deb 仍包含硬链接条目（tar 类型 h），会导致跨文件系统安装失败，拒绝发布"
+              exit 1
+            fi
+            echo "OK：无硬链接条目"
+          done
+
       - name: 收集安装包
         shell: bash
         run: |
@@ -103,9 +142,12 @@ jobs:
             | 🐧 Linux | `*.AppImage` / `*.deb` | AppImage 免安装 / deb 包 |
 
             ### 更新内容
+            - **修复跨设备看不到图片**：设置里新增「外链图片一键修复」，把只存了本机路径的图片引用批量转成内嵌，同步后所有设备都能显示（侧栏检测到外链图片会出现提示横幅）。
+            - **修复 Linux deb 安装失败**：v1.2.6 起 deb 内图标不再含硬链接条目，Deepin 25 等 `/opt` 与 `/usr/share/icons` 跨文件系统的系统上 `dpkg -i` 不再报「Invalid cross-device link」；CI 发布前会自动校验。
             - **单实例**：每台电脑系统只允许运行一个窗口，重复打开会聚焦已有窗口。
             - **修复右键「粘贴」**：改为经主进程读取系统剪贴板，解决从别处复制无法粘贴的问题。
-            - **新增插入能力**：可插入文本（引用/代码/分隔线/日期）、插入图片、插入链接（点击链接用默认浏览器打开）。
+            - **新增插入能力**：可插入文本（引用/代码/分隔线/日期）、插入图片（内嵌/引用路径可切换）、插入链接（弹窗填写，点击用默认浏览器打开）。
             - **macOS 托盘图标**：改为纯白笔记本样式（模板图），与其他菜单栏图标风格一致。
+            - **更新提示**：多渠道兜底（API / 页面重定向 / atom 源），检查结果在侧栏横幅明确可见。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

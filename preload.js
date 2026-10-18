@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   pickImage: function (mode) {
     return ipcRenderer.invoke("pick-image", mode);
   },
+  embedImagePaths: function (paths) {
+    return ipcRenderer.invoke("embed-image-paths", paths);
+  },
   onUpdateAvailable: function (cb) {
     ipcRenderer.on("update-available", function (_e, info) {
       cb(info);
