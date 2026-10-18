@@ -76,8 +76,5 @@
       "category": "Utility",
       "maintainer": "WorkBuddy"
     }
-  },
-  "dependencies": {
-    "dmg-license": "^1.0.11"
   }
 }
