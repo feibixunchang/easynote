@@ -3,6 +3,23 @@
 为「简易笔记」客户端提供账号注册/登录与跨设备笔记同步能力。
 纯 Node.js 实现，无需数据库，数据以文件形式保存在 `data/` 目录。
 
+## 网页版（浏览器客户端，与桌面/移动端实时同步）
+
+服务端从 v1.2.11 起会**顺带托管一个网页版客户端**：它与桌面端、移动端是同一套代码（同一套同步引擎），
+部署后浏览器打开 `http://<你的主机IP>:<PORT>/` 就是完整的「简易笔记」网页版。
+
+- **同源同端口**：网页版由服务端在 `WEB_DIR`（默认 `server/web`，可用 `WEB_ROOT` 环境变量覆盖）下直接提供，
+  不需要额外起一个 Web 服务器，**和同步接口共用同一个地址、同一个端口**。
+- **同一个账户**：网页版登录的是同一个 `data/`，你在桌面端 / 移动端注册的账号直接登录即可，
+  **笔记数据完全互通**——电脑上记的、手机上记的、网页版记的，三端实时互相显示。
+- **零配置**：只要 `server/web/` 目录存在（Docker 镜像 / `Dockerfile` 已内置；从源码跑则把仓库根目录的
+  `index.html` / `app.js` / `styles.css` 复制进 `server/web/` 即可），服务端启动后自动提供，无需任何额外设置。
+- **适用场景**：临时用别人的电脑记一笔、平板 / Chromebook 等不方便装客户端的设备、或者就想在浏览器里用。
+
+> 浏览器版会自动以「当前访问地址」作为同步服务器地址（即 `location.origin`），
+> 所以你在 A 电脑的浏览器里打开 `http://nas.local:3050/` 记的笔记，会实时同步到 B 手机的 App 里。
+> 网页版会自动隐藏「服务端地址」设置项（因为地址就取自当前域名）。
+
 ## 同步协议（增量）
 
 客户端登录后每 3 秒同步一轮，走**增量协议**：
@@ -93,13 +110,13 @@ JWT_SECRET="一段足够长的随机字符串" PORT=3000 npm start
 
 飞牛 NAS 基于 Linux，推荐用 Docker 长期稳定运行。
 
-### 方式一：Docker Compose（最稳）
+### 方式一：拷贝 `server/` 目录 + bind mount（最省事，适合 fnOS 共享文件夹）
 
-在 NAS 任意共享目录（如 `Docker/simplenote-sync/`）放入以下文件，然后把本 `server/` 内全部文件复制到该目录：
-
-`docker-compose.yml`：
+把本仓库 `server/` 目录**整个**复制到一个共享文件夹（如 `/vol1/simplenote-sync/`），
+然后用 `node:20-alpine` 镜像把该目录 bind mount 到容器的 `/app` 直接跑：
 
 ```yaml
+# 放在 /vol1/simplenote-sync/docker-compose.yml
 version: "3"
 services:
   simplenote-sync:
@@ -107,16 +124,20 @@ services:
     container_name: simplenote-zh-sync
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3050:3050"
     environment:
-      - PORT=3000
+      - PORT=3050
       - HOST=0.0.0.0
       - JWT_SECRET=请替换为足够长的随机字符串
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data        # 账户与笔记持久化（绝不可删）
     working_dir: /app
     command: ["sh", "-c", "npm install && npm start"]
 ```
+
+> ⚠️ 升级到「带网页版」的服务端时：把新版的 `server/server.js` 和**整个 `server/web/` 目录**
+> 一起覆盖进 `/vol1/simplenote-sync/` 即可（`data/` 不用动）。重启容器后，
+> 浏览器打开 `http://<NAS局域网IP>:3050/` 就是网页版，与桌面 / 移动端同一个账户实时同步。
 
 在 NAS 终端（或文件管理器里打开该目录的终端）执行：
 
@@ -137,6 +158,21 @@ docker compose up -d
    JWT_SECRET="随机字符串" npm start
    ```
 4. 需要开机自启的话，用 Docker 方式更省心。
+
+### 方式三：一键构建镜像（仓库自带 `Dockerfile` + `docker-compose.yml`，适合全新部署）
+
+仓库根目录已提供自包含镜像方案：把 `Dockerfile` 与 `docker-compose.yml` 放到一个目录，
+连同 `server/`、`index.html`、`app.js`、`styles.css` 一起，`docker compose up -d` 即可
+自动构建 `easynote-server:latest`（内置网页版，默认端口 3050，数据用命名卷 `easynote-data` 持久化）。
+
+```bash
+# 该目录下需包含：Dockerfile、docker-compose.yml、server/、index.html、app.js、styles.css
+docker compose up -d --build
+```
+
+如需迁移旧数据，把仓库 `docker-compose.yml` 里那行 `easynote-data:/app/data` 换成
+`- /vol1/simplenote-sync/data:/app/data` 即可直接挂你原来的数据目录（账户与笔记原样保留）。
+记得先把 `docker-compose.yml` 里的 `JWT_SECRET` 改成一段只有你知道的随机长字符串。
 
 ### 让外网能访问（三种常见做法）
 

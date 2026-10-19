@@ -164,6 +164,21 @@ npm start                   # 默认监听 http://localhost:3000
 无需手动点「立即同步」。轮询走增量协议（只传改动过的笔记），没有改动时每轮请求只有几十字节；
 窗口缩到托盘也照常同步。老版本服务端不支持增量时会自动退化为全量轮询，功能不受影响。
 
+### 🐳 网页版 / Docker 一键部署（浏览器访问，多端同账户实时同步）
+
+除了桌面端和移动端，服务端还能**顺带托管一个网页版**：部署后浏览器打开 `http://<你的主机IP>:3050/`
+就是完整的「简易笔记」，登录同一个账户，笔记与桌面 / 移动端**实时互通**——适合临时用别人电脑、
+平板 / Chromebook 等不方便装客户端的场景。
+
+- **最简（fnOS 共享文件夹）**：把 `server/` 整目录复制到 NAS 共享文件夹（如 `/vol1/simplenote-sync/`），
+  用 `node:20-alpine` 镜像 bind mount 到 `/app` 跑 `npm start` 即可；服务端会自动托管网页版（需带上 `server/web/`）。
+- **自包含镜像**：仓库根目录自带 `Dockerfile` + `docker-compose.yml`，在包含 `server/`、`index.html`、
+  `app.js`、`styles.css` 的目录执行 `docker compose up -d --build`，自动构建并运行
+  `easynote-server:latest`（默认端口 3050，数据用卷持久化）。
+- 详细步骤见 **[server/README.md](./server/README.md)**（含网页版说明、飞牛 NAS 三种部署方式、外网访问）。
+
+> 网页版以「当前访问地址」作为同步服务器，所以 `http://nas.local:3050/` 里记的笔记会实时同步到手机 App。
+
 ### ⚠️ 同步报错排查（413 / 同步失败）
 
 | 现象 | 原因 | 解决 |
@@ -193,6 +208,8 @@ npm start                   # 默认监听 http://localhost:3000
 | `.github/workflows/mobile.yml` | GitHub Actions 移动端打包工作流（tag `mobile-v*`） |
 | `xcode-tutorial.html` | iOS 用 Xcode 签名安装「简易笔记」的截图级教程（推荐方案） |
 | `sideloadly-tutorial.html` | iOS 侧载（Sideloadly / AltStore）备选方案截图级教程 |
+| `server/web/` | 浏览器版客户端静态资源（index.html / app.js / styles.css 的副本，由服务端同源托管，打开 `http://<host>:<PORT>/` 即用） |
+| `Dockerfile` / `docker-compose.yml` / `.dockerignore` | 一键构建「服务端 + 网页版」Docker 镜像，详见 [server/README.md](./server/README.md) |
 
 ## 已知范围
 

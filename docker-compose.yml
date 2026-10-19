@@ -1,0 +1,28 @@
+# 简易笔记 · 服务端 + 网页版（Docker 一键部署）
+# 启动后：浏览器打开 http://<你的主机IP>:3050/ 即为网页版，登录同一账户即可与桌面/移动端实时同步。
+#
+# 飞牛OS / fnOS 等 NAS 的 Docker 里，直接把本目录（含 Dockerfile / docker-compose.yml / server / index.html 等）
+# 放进一个共享文件夹，在该目录右键「创建容器」并指向本 compose 即可。
+services:
+  easynote:
+    build: .
+    image: easynote-server:latest
+    container_name: simplenote-zh-sync   # 沿用旧名，方便替换原有容器
+    ports:
+      - "3050:3050"
+    environment:
+      # 若用反代 / 跨网访问，按需改端口或加 HTTPS（反代在容器外做）
+      PORT: "3050"
+      # ⚠️ 上线前务必改成一段只有你知道的随机长字符串（否则别人能伪造登录令牌）
+      JWT_SECRET: "请改成一段随机长字符串"
+      # 笔记含内嵌图片时单批同步可能几 MB~几十 MB，保留 100mb 上限
+      BODY_LIMIT: "100mb"
+    volumes:
+      # 方式一（推荐）：命名卷，数据由 Docker 管理
+      - easynote-data:/app/data
+      # 方式二（迁移旧数据）：直接挂你原来 simplenote-sync 的数据目录，保留账户与笔记
+      # - /vol1/simplenote-sync/data:/app/data
+    restart: unless-stopped
+
+volumes:
+  easynote-data:

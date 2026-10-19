@@ -19,6 +19,9 @@ const SECRET = process.env.JWT_SECRET || "simplenote-zh-dev-secret-change-me";
 // （含内嵌图片）可能达数 MB~数十 MB，Express 默认 100kb 会返回 413 导致同步失败。
 const BODY_LIMIT = process.env.BODY_LIMIT || "100mb";
 const DATA_DIR = path.join(__dirname, "data");
+// 网页版（Docker 容器里随服务端一起托管）的静态资源目录，可用 WEB_ROOT 覆盖。
+// 默认指向「服务端同级目录下的 web/」：镜像里会把浏览器版 UI（index.html / app.js / styles.css）放这里。
+const WEB_DIR = process.env.WEB_ROOT || path.join(__dirname, "web");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const NOTES_DIR = path.join(DATA_DIR, "notes");
 
@@ -239,11 +242,25 @@ app.use(function (err, req, res, next) {
   res.status(err.status || err.statusCode || 500).json({ error: "服务器内部错误" });
 });
 
+// ============ 网页版（浏览器可访问的客户端）============
+// 与服务端同源、同端口托管：浏览器打开 http://<host>:<PORT>/ 即为完整网页版，
+// 登录同一个账户即可与桌面端 / 移动端实时同步（共用同一份 accounts + notes 数据）。
+app.use(express.static(WEB_DIR, { index: "index.html" }));
+// 兜底：非 /api 的未知路径返回 index.html（避免刷新/直链 404），API 不受影响
+app.use(function (req, res, next) {
+  if (req.method === "GET" && !req.path.startsWith("/api/")) {
+    var p = path.join(WEB_DIR, "index.html");
+    if (fs.existsSync(p)) return res.sendFile(p);
+  }
+  next();
+});
+
 app.listen(PORT, HOST, () => {
   const inDocker = require("fs").existsSync("/.dockerenv");
   const ips = getLocalIps();
   console.log("简易笔记云同步服务已启动");
   console.log("本机访问：http://localhost:" + PORT);
+  console.log("网页版（浏览器访问，与桌面/移动端实时同步）：http://localhost:" + PORT + "/");
   if (inDocker) {
     console.log("检测到运行在 Docker 容器中：外部设备请使用【宿主机(NAS)】的局域网 IP 访问，");
     console.log("例如 http://192.168.1.100:" + PORT + "（请勿使用容器内部地址）");

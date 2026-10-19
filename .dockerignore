@@ -1,0 +1,16 @@
+# 构建镜像时不需要打包进镜像的文件
+node_modules
+.git
+.gitignore
+dist
+build
+mobile
+ebin
+ebin2
+downloads
+probeC
+.cacheZ
+*.log
+.DS_Store
+server/data
+server/node_modules

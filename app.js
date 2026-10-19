@@ -116,7 +116,11 @@
     // 图片插入方式：默认内嵌（换设备也看得到）；"path" 为引用原文件路径（笔记体积小）
     var imgMode = store.getItem(IMGMODE_KEY);
     state.imageMode = imgMode === "path" ? "path" : "embed";
-    state.serverUrl = store.getItem(SERVER_KEY) || "http://localhost:3000";
+    // 默认同步地址：
+    // - Electron 桌面端：固定 localhost:3000（用户可在设置里改成自己的服务器）
+    // - 纯浏览器（Docker 网页版）：用当前页面所在域名即 API 同源地址，免填、免 CORS
+    var savedServer = store.getItem(SERVER_KEY);
+    state.serverUrl = savedServer || (window.electronAPI ? "http://localhost:3000" : (location.origin || "http://localhost:3000"));
     state.token = store.getItem(TOKEN_KEY) || "";
     state.user = store.getItem(USER_KEY) || "";
     try {
@@ -395,6 +399,13 @@
     el.accountModal = document.getElementById("accountModal");
     el.accountClose = document.getElementById("accountClose");
     el.serverUrl = document.getElementById("serverUrl");
+    // 网页版（Docker / 浏览器）与服务端同源同端口：服务端地址那一行没必要再让用户填，隐藏掉
+    if (!window.electronAPI && el.serverUrl) {
+      var srvRow = el.serverUrl.closest(".setting-row");
+      if (srvRow) srvRow.style.display = "none";
+      var srvHint = srvRow && srvRow.nextElementSibling;
+      if (srvHint && srvHint.classList.contains("modal-sub")) srvHint.style.display = "none";
+    }
     el.accUser = document.getElementById("accUser");
     el.accPass = document.getElementById("accPass");
     el.btnLogin = document.getElementById("btnLogin");
