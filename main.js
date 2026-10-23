@@ -248,13 +248,31 @@ function applyTitlebarTheme(win, dark) {
   }
 }
 
+// 记住并恢复窗口尺寸 / 位置：用户拉好的大小下次启动依然生效
+function winStateFile() {
+  return path.join(app.getPath("userData"), "window-state.json");
+}
+function loadWindowState() {
+  try {
+    const s = JSON.parse(fs.readFileSync(winStateFile(), "utf8"));
+    if (s && typeof s.width === "number" && typeof s.height === "number") return s;
+  } catch (e) {}
+  return null;
+}
+function saveWindowState(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    fs.writeFileSync(winStateFile(), JSON.stringify(win.getBounds()));
+  } catch (e) {}
+}
+
 function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors;
   const c = dark ? THEME_COLORS.dark : THEME_COLORS.light;
   const isMac = process.platform === "darwin";
   const win = new BrowserWindow({
     width: 1100,
-    height: 720,
+    height: 780,
     minWidth: 820,
     minHeight: 520,
     backgroundColor: c.bg,
@@ -275,17 +293,38 @@ function createWindow() {
     },
   });
 
+  // 恢复上次保存的窗口尺寸 / 位置（用户自己调好的大小下次启动依然生效）
+  const saved = loadWindowState();
+  if (saved) {
+    const bounds = { width: Math.max(saved.width, 820), height: Math.max(saved.height, 520) };
+    if (typeof saved.x === "number" && typeof saved.y === "number") {
+      bounds.x = saved.x;
+      bounds.y = saved.y;
+    }
+    try { win.setBounds(bounds, false); } catch (e) {}
+  }
+
   win.loadFile(path.join(__dirname, "index.html"));
   applyTitlebarTheme(win, dark);
 
-  // 关闭窗口时隐藏到托盘（托盘菜单里可真正退出）
+  // 关闭窗口时隐藏到托盘（托盘菜单里可真正退出）；隐藏前先保存当前尺寸
   win.on("close", function (e) {
+    saveWindowState(win);
     if (!app.isQuitting) {
       e.preventDefault();
       win.hide();
       return false;
     }
   });
+
+  // 拖拽 / 缩放窗口后，防抖保存尺寸与位置
+  let saveTimer = null;
+  const scheduleSave = function () {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () { saveWindowState(win); }, 500);
+  };
+  win.on("resize", scheduleSave);
+  win.on("move", scheduleSave);
 
   return win;
 }

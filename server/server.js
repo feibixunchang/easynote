@@ -245,6 +245,13 @@ app.use(function (err, req, res, next) {
 // ============ 网页版（浏览器可访问的客户端）============
 // 与服务端同源、同端口托管：浏览器打开 http://<host>:<PORT>/ 即为完整网页版，
 // 登录同一个账户即可与桌面端 / 移动端实时同步（共用同一份 accounts + notes 数据）。
+// PWA：manifest 与 service worker 用正确 MIME 提供（.webmanifest 默认类型不被识别，必须显式指定）
+app.get(/^\/(manifest\.webmanifest|sw\.js)$/, function (req, res) {
+  var isManifest = req.path === "/manifest.webmanifest";
+  res.type(isManifest ? "application/manifest+json" : "application/javascript");
+  res.sendFile(path.join(WEB_DIR, isManifest ? "manifest.webmanifest" : "sw.js"));
+});
+
 app.use(express.static(WEB_DIR, { index: "index.html" }));
 // 兜底：非 /api 的未知路径返回 index.html（避免刷新/直链 404），API 不受影响
 app.use(function (req, res, next) {
