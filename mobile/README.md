@@ -37,6 +37,23 @@ npm run build:ios           # 同步 iOS 工程，再用 Xcode 打开 ios/App/Ap
 真机调试：Android 用 `npm run android` 打开 Android Studio 运行；
 iOS 用 `npm run ios` 打开 Xcode，登录 Apple ID 后选择自己的 iPhone 运行。
 
+## 一键装到 iPhone（自签真机）
+
+iPhone 用数据线连上 Mac（手机上点过「信任此电脑」）后，在**仓库根目录**执行：
+
+```bash
+bash mobile/install-ios.sh
+```
+
+脚本会自动识别已连接的可安装 iPhone → `cap copy ios` 同步网页资源 → 编译 → 安装 → 启动。
+
+> 两个前提：
+> 1. **必须先 `cap copy ios`**——`ios/App/App/public` 是 `www` 的副本且被 gitignore，不同步就会装到旧网页资源（脚本已自动处理）；
+> 2. **`xcodebuild` 不能在受限沙箱里跑**（如某些自动化环境会卡在 `sandbox_apply: Operation not permitted`）。
+>    若只是想验证依赖能否编译，可用 `bash mobile/verify-ios-build.sh`（改用 swift 编译 Capacitor 依赖，绕过沙箱）。
+
+不方便连数据线时，可用 Sideloadly 侧载 Releases 里的 `ios-unsigned.ipa`（详见主 README「移动端」一节）。
+
 ## 发布
 
 推送 `mobile-v<版本>` 标签即触发 `.github/workflows/mobile.yml`：
