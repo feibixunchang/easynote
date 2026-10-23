@@ -1955,17 +1955,79 @@
       }
     }
 
+    var progress = document.getElementById("updateProgress");
+    var progressBar = document.getElementById("updateProgressBar");
+    var percentEl = document.getElementById("updatePercent");
+    var downloading = false;
+
     function showUpdate(info) {
       if (!info || !info.version) return;
       releaseUrl = info.url || "";
-      showBanner("发现新版本 v" + info.version, "下载", function () {
-        if (releaseUrl && api.openExternal) api.openExternal(releaseUrl);
-      });
+      // 横幅变为「发现新版本 vX」+「下载」按钮；点击后在应用内下载（带进度）
+      showBanner("发现新版本 v" + info.version, "下载", startUpdateFlow);
+    }
+
+    // 点击「下载」→ 启动主进程的应用内更新流程，并监听进度事件刷新横幅
+    function startUpdateFlow() {
+      if (downloading || !api.startUpdate) return;
+      downloading = true;
+      if (dl) { dl.hidden = true; dl.onclick = null; }
+      if (dismiss) dismiss.hidden = true;
+      if (text) text.textContent = "正在测速…";
+      if (progress) progress.hidden = false;
+      if (progressBar) progressBar.style.width = "0%";
+      if (percentEl) percentEl.hidden = true;
+      banner.hidden = false;
+      api.startUpdate().then(function (r) {
+        if (!r || !r.ok) {
+          downloadFailed("无法启动更新：" + ((r && r.error) || "未知错误"));
+        }
+      }).catch(function () { downloadFailed("无法启动更新"); });
+    }
+
+    function downloadFailed(msg) {
+      downloading = false;
+      if (dismiss) dismiss.hidden = false;
+      if (progress) progress.hidden = true;
+      if (percentEl) percentEl.hidden = true;
+      if (progressBar) progressBar.style.width = "0%";
+      // 失败横幅可「重试」
+      showBanner(msg, "重试", startUpdateFlow, 0);
+    }
+
+    // 主进程推送的更新状态：测速 / 下载进度 / 安装 / 失败
+    function handleUpdateStatus(s) {
+      if (!s) return;
+      if (s.phase === "speedtest") {
+        if (text) text.textContent = s.message || "正在测速…";
+        if (progress) progress.hidden = false;
+        if (progressBar) progressBar.style.width = "0%";
+        if (percentEl) percentEl.hidden = true;
+      } else if (s.phase === "download") {
+        if (progressBar) progressBar.style.width = (s.percent || 0) + "%";
+        if (percentEl) {
+          percentEl.hidden = false;
+          var mb = s.total ? (s.total / 1048576).toFixed(1) + "MB" : "";
+          var spd = s.speedKbps ? (s.speedKbps >= 1024 ? (s.speedKbps / 1024).toFixed(1) + "MB/s" : s.speedKbps + "KB/s") : "";
+          percentEl.textContent = (s.percent || 0) + "%" + (spd ? " · " + spd : "");
+        }
+        if (text) {
+          text.textContent = "下载中" + (s.channel ? "（" + s.channel + "）" : "") + (mb ? " · " + mb : "");
+        }
+      } else if (s.phase === "install") {
+        if (text) text.textContent = s.message || "下载完成，正在安装…";
+        if (progress) progress.hidden = true;
+        if (percentEl) percentEl.hidden = true;
+      } else if (s.phase === "error") {
+        downloadFailed(s.message || "更新失败");
+      }
+      // phase === "resolve" 阶段：仅提示，无需特殊处理
     }
 
     if (banner) {
       // 主进程自动检查发现新版本时推送（启动 5 秒后 / 每 6 小时 / 失败 10 分钟重试）
       api.onUpdateAvailable(showUpdate);
+      if (api.onUpdateStatus) api.onUpdateStatus(handleUpdateStatus);
       if (dismiss) {
         dismiss.addEventListener("click", function () { banner.hidden = true; });
       }

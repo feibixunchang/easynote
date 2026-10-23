@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Not
 const path = require("path");
 const fs = require("fs");
 const { execFile } = require("child_process");
+const updater = require("./updater");
 
 const APP_VERSION = app.getVersion();
 const REPO_OWNER = "feibixunchang";
@@ -583,6 +584,22 @@ ipcMain.handle("get-app-version", function () {
 
 ipcMain.handle("check-update", function () {
   return checkUpdate(true);
+});
+
+// 应用内自动更新：主进程跑「测速 → 下载（带进度）→ 安装并自动关闭旧客户端」全流程，
+// 进度/状态通过 update-status 事件实时推给渲染端界面。version 不传则取刚检查到的最新版。
+ipcMain.handle("start-update", function (_e, version) {
+  const v = version || (latestRelease && latestRelease.version);
+  if (!v) return { ok: false, error: "未知版本号" };
+  updater.downloadAndInstall({
+    version: v,
+    onStatus: function (s) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("update-status", s);
+      }
+    },
+  });
+  return { ok: true };
 });
 
 ipcMain.handle("open-external", function (_e, url) {

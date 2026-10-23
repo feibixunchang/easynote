@@ -147,6 +147,23 @@ body {
   font-size: 14px;
   line-height: 1;
 }
+/* 应用内更新进度：百分比 + 进度条 */
+.update-percent { font-size: 12px; font-weight: 600; color: var(--accent); flex: 0 0 auto; }
+.update-progress {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+  min-width: 60px;
+}
+.update-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
 
 .search-wrap { padding: 4px 14px 12px; }
 #search {

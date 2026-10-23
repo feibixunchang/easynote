@@ -33,6 +33,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
       cb(info);
     });
   },
+  startUpdate: function (version) {
+    return ipcRenderer.invoke("start-update", version);
+  },
+  onUpdateStatus: function (cb) {
+    ipcRenderer.on("update-status", function (_e, s) {
+      cb(s);
+    });
+  },
   setTitlebarDark: function (dark) {
     return ipcRenderer.invoke("set-titlebar-dark", dark);
   },
