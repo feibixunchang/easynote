@@ -18,7 +18,35 @@ const SECRET = process.env.JWT_SECRET || "simplenote-zh-dev-secret-change-me";
 // 请求体上限：客户端「一键修复」会把图片转成 base64 内嵌进笔记，同步时整批笔记
 // （含内嵌图片）可能达数 MB~数十 MB，Express 默认 100kb 会返回 413 导致同步失败。
 const BODY_LIMIT = process.env.BODY_LIMIT || "100mb";
-const DATA_DIR = path.join(__dirname, "data");
+
+// -------- 自托管部署的安全 / 资源保护开关（全部可用环境变量覆盖）--------
+// 注册策略：本软件供他人自行部署，每个人用自己的实例同步自己的数据（数据不互通），
+// 所以服务端默认不需要长期开放注册。
+//   - 显式设置 ALLOW_REGISTRATION=true / false 时以其为准；
+//   - 未设置时采用「引导」策略：只有第一个账号可以注册，建好后自动关闭。
+//     这样新部署的人能创建自己的账号，之后再无人能注册进来。
+const ALLOW_REGISTRATION_ENV = process.env.ALLOW_REGISTRATION;
+function registrationAllowed(userCount) {
+  if (ALLOW_REGISTRATION_ENV !== undefined && String(ALLOW_REGISTRATION_ENV) !== "") {
+    return String(ALLOW_REGISTRATION_ENV).toLowerCase() !== "false";
+  }
+  return userCount === 0; // 仅在尚无账号时允许注册首个账号
+}
+// 最多注册用户数（自托管磁盘有限，防止被批量注册塞满）
+const MAX_USERS = parseInt(process.env.MAX_USERS || "100", 10);
+// 单用户笔记存储配额（MB），0 表示不限。自托管磁盘有限时的护栏，防止单账号意外占满。
+const USER_QUOTA_MB = parseInt(process.env.USER_QUOTA_MB || "500", 10);
+const USER_QUOTA_BYTES = USER_QUOTA_MB > 0 ? USER_QUOTA_MB * 1024 * 1024 : 0;
+// 登录失败达到该次数后冷却（防暴力破解 / 撞库）
+const LOGIN_MAX_FAILS = parseInt(process.env.LOGIN_MAX_FAILS || "5", 10);
+const LOGIN_LOCK_MS = parseInt(process.env.LOGIN_LOCK_MIN || "15", 10) * 60 * 1000;
+// 单 IP 每小时最多注册账号数（防机器人批量注册）
+const REGISTER_MAX_PER_HOUR = parseInt(process.env.REGISTER_MAX_PER_HOUR || "5", 10);
+// bcrypt 强度（成本因子），越高越耐离线暴力破解，登录时略慢
+const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || "12", 10);
+// 注册密码最小长度
+const MIN_PASSWORD_LEN = parseInt(process.env.MIN_PASSWORD_LEN || "8", 10);
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 // 网页版（Docker 容器里随服务端一起托管）的静态资源目录，可用 WEB_ROOT 覆盖。
 // 默认指向「服务端同级目录下的 web/」：镜像里会把浏览器版 UI（index.html / app.js / styles.css）放这里。
 const WEB_DIR = process.env.WEB_ROOT || path.join(__dirname, "web");
@@ -28,6 +56,60 @@ const NOTES_DIR = path.join(DATA_DIR, "notes");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(NOTES_DIR, { recursive: true });
 if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, "{}");
+
+/* ============ 简易限速（进程内存，重启即清空）============
+ * 目的：公网开放后防暴力破解（登录）与批量注册（注册）。
+ * 若要多实例部署，请换成 Redis 等共享存储。 */
+function clientIp(req) {
+  // 部署在反向代理（Nginx/Caddy）后面时，必须取 X-Forwarded-For 的第一跳，
+  // 否则所有请求都会被记成代理自己的 IP，限速等于失效。
+  var xf = req.headers["x-forwarded-for"];
+  if (xf) return String(xf).split(",")[0].trim();
+  var xr = req.headers["x-real-ip"];
+  if (xr) return String(xr).trim();
+  return String((req.ip || (req.connection && req.connection.remoteAddress) || "unknown"));
+}
+
+const loginFails = new Map(); // key(ip 或 用户名) -> { count, until }
+const registerHits = new Map(); // ip -> [时间戳]
+
+function isLocked(key) {
+  var rec = loginFails.get(key);
+  if (!rec) return false;
+  if (rec.until && Date.now() < rec.until) return true;
+  if (rec.until && Date.now() >= rec.until) loginFails.delete(key); // 冷却结束自动解锁
+  return false;
+}
+function noteLoginFail(key) {
+  var rec = loginFails.get(key) || { count: 0, until: 0 };
+  rec.count += 1;
+  if (rec.count >= LOGIN_MAX_FAILS) {
+    rec.until = Date.now() + LOGIN_LOCK_MS;
+    rec.count = 0;
+  }
+  loginFails.set(key, rec);
+}
+function clearLoginFail(key) {
+  loginFails.delete(key);
+}
+function tooManyRegisters(ip) {
+  var now = Date.now();
+  var arr = (registerHits.get(ip) || []).filter(function (t) { return now - t < 3600000; });
+  arr.push(now);
+  registerHits.set(ip, arr);
+  return arr.length > REGISTER_MAX_PER_HOUR;
+}
+// 定期清理过期限速记录，避免长期运行内存缓慢增长
+setInterval(function () {
+  var now = Date.now();
+  loginFails.forEach(function (v, k) {
+    if (v.until && now >= v.until) loginFails.delete(k);
+  });
+  registerHits.forEach(function (v, k) {
+    var arr = v.filter(function (t) { return now - t < 3600000; });
+    if (arr.length) registerHits.set(k, arr); else registerHits.delete(k);
+  });
+}, 10 * 60 * 1000).unref();
 
 function loadUsers() {
   try { return JSON.parse(fs.readFileSync(USERS_FILE, "utf8")); } catch (e) { return {}; }
@@ -54,7 +136,15 @@ function loadNotes(u) {
   } catch (e) { return {}; }
 }
 function saveNotes(u, obj) {
-  fs.writeFileSync(userNotesFile(u), JSON.stringify(obj));
+  var json = JSON.stringify(obj);
+  // 每用户存储配额：自托管（NAS）磁盘有限。公网开放注册 + 100mb 请求体上限下，
+  // 若无配额，单用户反复塞入带图笔记就能把磁盘撑爆。
+  if (USER_QUOTA_BYTES > 0 && Buffer.byteLength(json, "utf8") > USER_QUOTA_BYTES) {
+    var err = new Error("QUOTA_EXCEEDED");
+    err.code = "QUOTA_EXCEEDED";
+    throw err;
+  }
+  fs.writeFileSync(userNotesFile(u), json);
 }
 // 墓碑（已永久删除的笔记 ID）：跨端传播，防止其他设备把已被永久删除的笔记重新拉回来。
 // 单独存一个文件，避免与 notes 对象混淆。
@@ -117,14 +207,31 @@ app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 // 注册
 app.post("/api/register", (req, res) => {
+  // 先限流（廉价），避免被洪水请求打进来后才去做文件读写
+  const ip = clientIp(req);
+  if (tooManyRegisters(ip)) {
+    return res.status(429).json({ error: "注册过于频繁，请稍后再试" });
+  }
   const body = req.body || {};
   const username = (body.username || "").trim();
   const password = body.password || "";
-  if (username.length < 2) return res.status(400).json({ error: "用户名至少 2 个字符" });
-  if (password.length < 6) return res.status(400).json({ error: "密码至少 6 位" });
   const users = loadUsers();
+  // 注册开关按部署策略：默认仅允许创建首个账号，之后自动关闭；
+  // 想让多人共用一个实例（例如家庭共享）时，设置 ALLOW_REGISTRATION=true。
+  if (!registrationAllowed(Object.keys(users).length)) {
+    return res.status(403).json({
+      error: "当前服务未开放注册（自托管默认：仅允许创建首个账号）。如需开放，请设置 ALLOW_REGISTRATION=true",
+    });
+  }
+  if (username.length < 2) return res.status(400).json({ error: "用户名至少 2 个字符" });
+  if (password.length < MIN_PASSWORD_LEN) {
+    return res.status(400).json({ error: "密码至少 " + MIN_PASSWORD_LEN + " 位（密码越强度越高，越难被破解）" });
+  }
+  if (Object.keys(users).length >= MAX_USERS) {
+    return res.status(403).json({ error: "用户数量已达上限（" + MAX_USERS + "），请联系服务提供者" });
+  }
   if (users[username]) return res.status(409).json({ error: "该用户名已被注册" });
-  users[username] = { username: username, passwordHash: bcrypt.hashSync(password, 10) };
+  users[username] = { username: username, passwordHash: bcrypt.hashSync(password, BCRYPT_ROUNDS) };
   saveUsers(users);
   const token = jwt.sign({ username: username }, SECRET, { expiresIn: "30d" });
   res.json({ token: token, username: username });
@@ -135,10 +242,26 @@ app.post("/api/login", (req, res) => {
   const body = req.body || {};
   const username = (body.username || "").trim();
   const password = body.password || "";
+  const ip = clientIp(req);
+  // 来源 IP 已被锁：直接拒绝，挡单源洪水 / 暴力破解
+  if (isLocked(ip)) {
+    return res.status(429).json({ error: "登录失败次数过多，请 " + (LOGIN_LOCK_MS / 60000) + " 分钟后再试" });
+  }
   const users = loadUsers();
   const u = users[username];
-  if (!u || !bcrypt.compareSync(password, u.passwordHash))
+  if (!u || !bcrypt.compareSync(password, u.passwordHash)) {
+    noteLoginFail(ip);
+    if (username) noteLoginFail(username);
+    // 账号被多个来源轮番尝试时同样冷却（挡分布式撞库）
+    if (isLocked(username)) {
+      return res.status(429).json({ error: "登录失败次数过多，请 " + (LOGIN_LOCK_MS / 60000) + " 分钟后再试" });
+    }
     return res.status(401).json({ error: "用户名或密码错误" });
+  }
+  // 密码正确 → 立即清锁放行。
+  // 刻意不因"账号被锁"而拦住正确密码：否则攻击者只要知道用户名就能把主人反锁在门外（拒绝服务）。
+  clearLoginFail(ip);
+  clearLoginFail(username);
   const token = jwt.sign({ username: username }, SECRET, { expiresIn: "30d" });
   res.json({ token: token, username: username });
 });
@@ -237,6 +360,13 @@ app.use(function (err, req, res, next) {
   }
   if (err && err.type === "entity.parse.failed") {
     return res.status(400).json({ error: "请求体不是合法的 JSON" });
+  }
+  if (err && err.code === "QUOTA_EXCEEDED") {
+    return res.status(413).json({
+      error:
+        "存储空间已达上限（每个用户 " + USER_QUOTA_MB + "MB）。请删除部分笔记或减少内嵌图片；" +
+        "服务端可用 USER_QUOTA_MB 环境变量调整配额",
+    });
   }
   console.error("服务器错误:", err && (err.stack || err.message));
   res.status(err.status || err.statusCode || 500).json({ error: "服务器内部错误" });
