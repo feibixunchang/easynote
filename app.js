@@ -750,7 +750,20 @@
     el.infoModal.hidden = false;
   }
 
+  // 复制文本：桌面端走主进程 clipboard（三端 100% 可靠）；网页端退回 navigator.clipboard / execCommand
   function copyText(text) {
+    var api = window.electronAPI;
+    if (api && api.writeClipboard) {
+      api
+        .writeClipboard(text)
+        .then(function (ok) {
+          if (!ok) fallbackCopy(text);
+        })
+        .catch(function () {
+          fallbackCopy(text);
+        });
+      return;
+    }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).catch(function () { fallbackCopy(text); });
     } else {
@@ -766,6 +779,32 @@
     ta.select();
     try { document.execCommand("copy"); } catch (e) {}
     document.body.removeChild(ta);
+  }
+
+  // 编辑器（textarea）当前选中的文本
+  function getEditorSelection() {
+    if (!el.editor) return "";
+    var s = el.editor.selectionStart;
+    var e2 = el.editor.selectionEnd;
+    if (s === e2) return "";
+    return el.editor.value.substring(s, e2);
+  }
+  // 复制选区：改用主进程 clipboard，替代已废弃且常静默失败的 execCommand("copy")
+  function copySelectedText() {
+    var t = getEditorSelection();
+    if (t) copyText(t);
+  }
+  // 剪切选区：写入剪贴板后删除选区，并触发 input 事件复用原有的保存 / 渲染逻辑
+  function cutSelectedText() {
+    var t = getEditorSelection();
+    if (!t) return;
+    copyText(t);
+    var ta = el.editor;
+    var s = ta.selectionStart;
+    var e2 = ta.selectionEnd;
+    ta.value = ta.value.substring(0, s) + ta.value.substring(e2);
+    ta.selectionStart = ta.selectionEnd = s;
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
   var toastTimer;
@@ -903,8 +942,8 @@
         { label: "插入图片", action: function () { insertImage(); } },
         { label: "插入链接", action: function () { insertLink(); } },
         { sep: true },
-        { label: "剪切", shortcut: "Ctrl+X", action: function () { document.execCommand("cut"); } },
-        { label: "复制", shortcut: "Ctrl+C", action: function () { document.execCommand("copy"); } },
+        { label: "剪切", shortcut: "Ctrl+X", action: cutSelectedText },
+        { label: "复制", shortcut: "Ctrl+C", action: copySelectedText },
         { label: "粘贴", shortcut: "Ctrl+V", action: function () { pasteAtCursor(); } },
         { label: "全选", shortcut: "Ctrl+A", action: function () { el.editor.focus(); el.editor.select(); } },
       ]);
@@ -1891,6 +1930,29 @@
       strip.addEventListener("dblclick", function () {
         window.electronAPI.toggleMaximize();
       });
+    }
+    // 自定义窗口按钮（最小化 / 最大化 / 关闭）：
+    // 仅 Win/Linux 显示——过去依赖系统 titleBarOverlay，其按钮被整条拖拽区遮挡导致点不动 X。
+    // macOS 保留左上角原生交通灯，这里直接隐藏，避免重复按钮。
+    if (window.electronAPI && window.electronAPI.getPlatform && window.electronAPI.minimizeWindow) {
+      window.electronAPI
+        .getPlatform()
+        .then(function (plat) {
+          var controls = document.getElementById("winControls");
+          if (!controls) return;
+          if (plat === "darwin") {
+            controls.hidden = true;
+            return;
+          }
+          controls.hidden = false;
+          var minBtn = document.getElementById("winMinBtn");
+          var maxBtn = document.getElementById("winMaxBtn");
+          var closeBtn = document.getElementById("winCloseBtn");
+          if (minBtn) minBtn.addEventListener("click", function () { window.electronAPI.minimizeWindow(); });
+          if (maxBtn) maxBtn.addEventListener("click", function () { window.electronAPI.toggleMaximize(); });
+          if (closeBtn) closeBtn.addEventListener("click", function () { window.electronAPI.closeWindow(); });
+        })
+        .catch(function () {});
     }
     if (state.token) {
       render(); // 先把本地笔记显示出来，再同步

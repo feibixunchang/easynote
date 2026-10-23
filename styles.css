@@ -52,9 +52,11 @@ body {
   flex-direction: column;
 }
 
-/* 顶部标题栏：与主界面同色，整条是窗口拖拽区；
-   Win/Linux 右上角、macOS 左上角的系统原生窗口按钮悬浮在这一层之上 */
+/* 顶部标题栏：与主界面同色，整条是窗口拖拽区。
+   右上角为自定义窗口按钮（Win/Linux 显示）；macOS 用左上角原生交通灯，按钮隐藏。
+   注意：按钮必须 app-region: no-drag，否则点击会被整条拖拽区吞掉（这正是 Windows X 点不动的原因）。 */
 .titlebar-strip {
+  position: relative;
   flex: 0 0 34px;
   height: 34px;
   display: flex;
@@ -66,6 +68,30 @@ body {
   app-region: drag;
   user-select: none;
 }
+.win-controls {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.win-controls[hidden] { display: none; }
+.win-controls button {
+  width: 44px;
+  height: 34px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.win-controls button:hover { background: var(--hover); }
+.win-controls button.close:hover { background: #d94848; color: #fff; }
 .titlebar-title {
   font-size: 12px;
   color: var(--text-mute);

@@ -241,11 +241,9 @@ ipcMain.handle("get-system-fonts", function (_event, force) {
 // macOS：隐藏标题栏保留交通灯，背景色随主题
 function applyTitlebarTheme(win, dark) {
   const c = dark ? THEME_COLORS.dark : THEME_COLORS.light;
-  if (process.platform === "darwin") {
-    win.setBackgroundColor(c.bg);
-  } else if (typeof win.setTitleBarOverlay === "function") {
-    win.setTitleBarOverlay({ color: c.bg, symbolColor: c.fg });
-  }
+  // 不再使用 titleBarOverlay：Win/Linux 的原生按钮层会被 HTML 拖拽区遮挡导致点不动，
+  // 改为 HTML 标题栏里自定义的「最小化 / 最大化 / 关闭」按钮（macOS 保留原生交通灯）
+  win.setBackgroundColor(c.bg);
 }
 
 // 记住并恢复窗口尺寸 / 位置：用户拉好的大小下次启动依然生效
@@ -280,9 +278,6 @@ function createWindow() {
     // 隐藏系统标题栏，让标题区域与主界面同色：
     // Win/Linux 用原生窗口按钮覆盖层，macOS 保留左上角交通灯
     titleBarStyle: isMac ? "hiddenInset" : "hidden",
-    ...(isMac
-      ? {}
-      : { titleBarOverlay: { color: c.bg, symbolColor: c.fg, height: 34 } }),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -663,6 +658,31 @@ ipcMain.handle("get-clipboard-text", function () {
   } catch (e) {
     return "";
   }
+});
+
+// 写入系统剪贴板（右键「复制/剪切」、工具栏复制按钮走这里）。
+// 主进程 clipboard 三端 100% 可靠，替代渲染进程里已废弃的 document.execCommand("copy")
+// 与受安全上下文/聚焦限制的 navigator.clipboard.writeText。
+ipcMain.handle("write-clipboard", function (_e, text) {
+  if (typeof text !== "string") return false;
+  try {
+    clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    return false;
+  }
+});
+
+// 窗口控制：供 HTML 标题栏里的自定义按钮调用（Win/Linux 显示，macOS 用原生交通灯）
+ipcMain.handle("get-platform", function () {
+  return process.platform;
+});
+ipcMain.handle("minimize-window", function () {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+});
+ipcMain.handle("close-window", function () {
+  // 走标准 close 流程：会触发 win.on("close")，隐藏到托盘（与点 X 行为一致）
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
 });
 
 // 无法被 nativeImage 解码时，按扩展名猜测 MIME

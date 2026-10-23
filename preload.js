@@ -22,6 +22,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getClipboardText: function () {
     return ipcRenderer.invoke("get-clipboard-text");
   },
+  writeClipboard: function (text) {
+    return ipcRenderer.invoke("write-clipboard", text);
+  },
+  getPlatform: function () {
+    return ipcRenderer.invoke("get-platform");
+  },
+  minimizeWindow: function () {
+    return ipcRenderer.invoke("minimize-window");
+  },
+  closeWindow: function () {
+    return ipcRenderer.invoke("close-window");
+  },
   pickImage: function (mode) {
     return ipcRenderer.invoke("pick-image", mode);
   },

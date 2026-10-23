@@ -7,16 +7,22 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <!-- 顶部标题栏（拖拽区；Win/Linux 右上角与 macOS 左上角为系统原生窗口按钮） -->
+  <!-- 顶部标题栏：整条是窗口拖拽区；右侧为自定义窗口按钮（仅 Win/Linux 显示，
+       macOS 保留左上角原生交通灯，由 app.js 按平台控制显隐） -->
   <div class="titlebar-strip" id="titlebarStrip">
     <span class="titlebar-title">简易笔记</span>
+    <div class="win-controls" id="winControls" hidden>
+      <button type="button" id="winMinBtn" title="最小化" aria-label="最小化">─</button>
+      <button type="button" id="winMaxBtn" title="最大化" aria-label="最大化">□</button>
+      <button type="button" id="winCloseBtn" class="close" title="关闭" aria-label="关闭">✕</button>
+    </div>
   </div>
 
   <div class="app" id="app">
     <!-- 左侧栏：标签 / 搜索 / 回收站 -->
     <aside class="sidebar">
       <div class="sidebar-header">
-        <span class="logo">简易笔记</span><span class="version-badge" id="appVersion" title="当前版本">v1.2.14</span>
+        <span class="logo">简易笔记</span><span class="version-badge" id="appVersion" title="当前版本">v1.2.15</span>
       </div>
 
       <div class="update-banner" id="updateBanner" hidden>
