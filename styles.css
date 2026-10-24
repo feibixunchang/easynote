@@ -740,3 +740,74 @@ button.primary:hover { filter: brightness(1.05); }
   margin-top: 6px;
   word-break: break-all;
 }
+
+/* ---------------- 历史版本弹窗 ---------------- */
+.modal-box.wide { width: 720px; }
+.history-wrap { display: flex; gap: 14px; margin-top: 4px; }
+.history-list {
+  list-style: none;
+  flex: 0 0 216px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  background: var(--bg);
+}
+.history-list li {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.history-list li:hover { background: var(--hover); }
+.history-list li.active { background: var(--accent-soft); color: var(--accent); }
+.history-list li .h-time { display: block; font-weight: 600; }
+.history-list li .h-meta { display: block; color: var(--text-light); font-size: 11.5px; margin-top: 2px; }
+.history-list li.active .h-meta { color: inherit; opacity: 0.75; }
+.history-preview {
+  flex: 1;
+  min-width: 0;
+  min-height: 240px;
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar-bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+}
+.history-empty { padding: 16px; color: var(--text-light); font-size: 13px; }
+
+/* ---------------- 同步诊断 ---------------- */
+.diag-list { display: flex; flex-direction: column; gap: 8px; max-height: 54vh; overflow-y: auto; }
+.diag-item {
+  display: flex;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  font-size: 13px;
+}
+.diag-item .diag-ico { flex: 0 0 16px; text-align: center; font-weight: 700; }
+.diag-item.ok .diag-ico { color: #2e9e63; }
+.diag-item.warn .diag-ico { color: #d9932f; }
+.diag-item.err .diag-ico { color: #d94848; }
+.diag-item .diag-body { flex: 1; min-width: 0; }
+.diag-item .diag-title { font-weight: 600; }
+.diag-item .diag-detail { color: var(--text-light); font-size: 12.5px; margin-top: 2px; word-break: break-word; }
+
+@media (max-width: 760px) {
+  .modal-box.wide { width: 94vw; }
+  .history-wrap { flex-direction: column; }
+  .history-list { flex: 0 0 auto; max-height: 160px; }
+  .history-preview { min-height: 140px; max-height: 200px; }
+}

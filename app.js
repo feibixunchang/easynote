@@ -17,6 +17,8 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var IMGMODE_KEY = "simplenote_zh_imgmode"; // embed | path（插入图片的方式）
   var CLOSE_KEY = "simplenote_zh_close";     // tray | quit（点 ✕ 时的行为）
+  var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
+  var HISTORY_KEY = "simplenote_zh_history";     // 笔记历史快照（仅本地，不上传、不参与同步）
   // 纯浏览器环境（无 Electron）下的回退字体清单（均为 Windows 常见中文字体）
   var FALLBACK_FONTS = [
     "微软雅黑", "Microsoft YaHei", "等线", "Dengxian", "黑体", "SimHei",
@@ -94,6 +96,9 @@
     imageMode: "embed", // 'embed' 内嵌进笔记 | 'path' 引用原文件路径
     closeBehavior: "tray", // 'tray' 点 ✕ 最小化到托盘 | 'quit' 直接退出
     selected: {}, // 回收站里勾选的笔记 id（批量恢复 / 批量删除）
+    trashAutoDays: 0, // 回收站自动清理天数（0 = 关闭）
+    history: {}, // 笔记 id → [{ts, content}]，仅本地保存的历史快照
+    lastSyncError: "", // 最近一次同步失败的原因（诊断面板用）
   };
 
   /* ---------------- 存储 ---------------- */
@@ -121,6 +126,9 @@
     state.imageMode = imgMode === "path" ? "path" : "embed";
     // 点 ✕ 时的行为：默认最小化到托盘（后台同步不中断）
     state.closeBehavior = store.getItem(CLOSE_KEY) === "quit" ? "quit" : "tray";
+    // 回收站自动清理：默认关闭（自动删数据这种事实在不宜默认开）
+    state.trashAutoDays = parseInt(store.getItem(TRASHDAYS_KEY) || "0", 10) || 0;
+    loadHistory();
     // 默认同步地址：
     // - Electron 桌面端：固定 localhost:3000（用户可在设置里改成自己的服务器）
     // - 纯浏览器（Docker 网页版）：用当前页面所在域名即 API 同源地址，免填、免 CORS
@@ -187,6 +195,110 @@
       return state.purged.indexOf(n.id) === -1;
     });
     if (state.notes.length !== before) saveLocalOnly();
+  }
+
+  /* ---------------- 历史版本（本地快照） ----------------
+     不参与同步：只是给"手滑改坏了 / 删掉了一段"留个后悔药，各设备各存各的。
+     存储代价必须控制，否则 localStorage（通常 5~10MB）会被内嵌图片撑爆：
+       · 单条笔记超过 200KB（基本是内嵌大图）不记快照
+       · 同一笔记最快 10 分钟留一条，最多 20 条
+       · 全库历史总量超过 2MB 时按时间淘汰最旧的 */
+  var HISTORY_MAX_PER_NOTE = 20;
+  var HISTORY_MIN_GAP_MS = 10 * 60 * 1000;
+  var HISTORY_SKIP_OVER = 200 * 1024;
+  var HISTORY_MAX_BYTES = 2 * 1024 * 1024;
+
+  function loadHistory() {
+    try {
+      var h = JSON.parse(store.getItem(HISTORY_KEY));
+      state.history = h && typeof h === "object" && !Array.isArray(h) ? h : {};
+    } catch (e) {
+      state.history = {};
+    }
+  }
+  function persistHistory() {
+    var json = JSON.stringify(state.history);
+    var guard = 0;
+    while (json.length > HISTORY_MAX_BYTES && guard++ < 500) {
+      // 找时间戳最旧的那条快照淘汰
+      var oldestId = null;
+      var oldestTs = Infinity;
+      Object.keys(state.history).forEach(function (id) {
+        var arr = state.history[id];
+        if (!Array.isArray(arr) || !arr.length) return;
+        if (arr[0].ts < oldestTs) { oldestTs = arr[0].ts; oldestId = id; }
+      });
+      if (!oldestId) break;
+      state.history[oldestId].shift();
+      if (!state.history[oldestId].length) delete state.history[oldestId];
+      json = JSON.stringify(state.history);
+    }
+    try {
+      store.setItem(HISTORY_KEY, json);
+    } catch (e) {
+      // 配额还是不够：丢掉最旧的一半再试一次；再失败就放弃本次（绝不能因为历史记录拖垮正文保存）
+      var ids = Object.keys(state.history).sort(function (a, b) {
+        var la = state.history[a] || [];
+        var lb = state.history[b] || [];
+        return ((la[la.length - 1] || { ts: 0 }).ts) - ((lb[lb.length - 1] || { ts: 0 }).ts);
+      });
+      ids.slice(0, Math.ceil(ids.length / 2)).forEach(function (id) { delete state.history[id]; });
+      try { store.setItem(HISTORY_KEY, JSON.stringify(state.history)); } catch (e2) {}
+    }
+  }
+  function historyOf(id) {
+    var arr = state.history[id];
+    return Array.isArray(arr) ? arr : [];
+  }
+  function pushSnapshot(id, ts, content) {
+    if (!id || typeof content !== "string") return;
+    if (content.length > HISTORY_SKIP_OVER) return;
+    if (!Array.isArray(state.history[id])) state.history[id] = [];
+    var arr = state.history[id];
+    arr.push({ ts: ts, content: content });
+    if (arr.length > HISTORY_MAX_PER_NOTE) arr.splice(0, arr.length - HISTORY_MAX_PER_NOTE);
+    persistHistory();
+  }
+  // 编辑时调用：prevContent 是这次修改之前的正文（记录"改之前"的样子，才能回滚到破坏前的状态）
+  function maybeSnapshot(id, prevContent) {
+    if (!id || typeof prevContent !== "string") return;
+    if (!prevContent.trim()) return; // 空内容不值得占一格
+    if (prevContent.length > HISTORY_SKIP_OVER) return;
+    var arr = historyOf(id);
+    var last = arr[arr.length - 1];
+    var now = Date.now();
+    if (last && last.content === prevContent) return; // 这个版本已经记过
+    if (last && now - last.ts < HISTORY_MIN_GAP_MS) return; // 节流
+    pushSnapshot(id, now, prevContent);
+  }
+  function dropHistory(id) {
+    if (!state.history[id]) return;
+    delete state.history[id];
+    persistHistory();
+  }
+
+  /* ---------------- 回收站自动清理 ----------------
+     只在启动时跑一次：把移入回收站超过设定天数的笔记永久删除
+     （记墓碑 + 上报服务端，和其它设备保持一致）。默认关闭——
+     自动删数据这种事必须由用户明确选择。 */
+  function autoPurgeTrash() {
+    var days = state.trashAutoDays || 0;
+    if (days <= 0) return 0;
+    var cutoff = Date.now() - days * 86400000;
+    var ids = state.notes.filter(function (n) {
+      return !!n.deleted && (n.deletedDate || n.modifiedDate || 0) < cutoff;
+    }).map(function (n) { return n.id; });
+    if (!ids.length) return 0;
+    ids.forEach(function (id) {
+      if (state.purged.indexOf(id) === -1) state.purged.push(id);
+      dropHistory(id);
+    });
+    store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+    state.notes = state.notes.filter(function (n) { return ids.indexOf(n.id) === -1; });
+    if (ids.indexOf(state.currentId) !== -1) state.currentId = null;
+    saveLocalOnly();
+    purgeOnServer(ids); // 未登录时内部直接返回
+    return ids.length;
   }
 
   /* ---------------- 主题（跟随系统 / 手动） ---------------- */
@@ -429,6 +541,23 @@
     el.accLoggedIn = document.getElementById("accLoggedIn");
     el.accName = document.getElementById("accName");
     el.syncStatus = document.getElementById("syncStatus");
+    // 回收站自动清理
+    el.trashDaysSelect = document.getElementById("trashDaysSelect");
+    // 历史版本
+    el.historyModal = document.getElementById("historyModal");
+    el.historyList = document.getElementById("historyList");
+    el.historyPreview = document.getElementById("historyPreview");
+    el.historyHint = document.getElementById("historyHint");
+    el.historyRestore = document.getElementById("historyRestore");
+    el.historyClear = document.getElementById("historyClear");
+    el.historyClose = document.getElementById("historyClose");
+    // 同步诊断
+    el.btnDiagnose = document.getElementById("btnDiagnose");
+    el.diagnoseModal = document.getElementById("diagnoseModal");
+    el.diagList = document.getElementById("diagList");
+    el.diagRerun = document.getElementById("diagRerun");
+    el.diagCopy = document.getElementById("diagCopy");
+    el.diagClose = document.getElementById("diagClose");
   }
 
   /* ---------------- 过滤 / 排序 ---------------- */
@@ -589,6 +718,7 @@
     ids.forEach(function (id) {
       if (state.purged.indexOf(id) === -1) state.purged.push(id);
       delete state.selected[id];
+      dropHistory(id); // 笔记没了，历史快照也一并清掉，省本地空间
     });
     store.setItem(PURGE_KEY, JSON.stringify(state.purged));
     state.notes = state.notes.filter(function (n) { return ids.indexOf(n.id) === -1; });
@@ -815,6 +945,10 @@
         showInfo(note); break;
       case "share":
         copyText(note.content); toast("已复制笔记内容到剪贴板"); break;
+      case "exportMd":
+        exportNoteMarkdown(note); break;
+      case "history":
+        openHistory(note); break;
       case "more": {
         var mbtn = el.toolbar.querySelector('[data-action="more"]');
         var r = mbtn ? mbtn.getBoundingClientRect() : { left: 200, bottom: 80 };
@@ -995,6 +1129,102 @@
     }, actionLabel ? 6000 : 1800);
   }
 
+  /* ---------------- 单条导出 Markdown / 导入 Markdown ---------------- */
+  // 文件名清洗：去掉路径分隔符与系统保留字符，限制长度（Windows 最多 255 字节，中文占 3 字节）
+  function safeFileName(s) {
+    var t = String(s || "").replace(/[\\/:*?"<>|\r\n\t]/g, " ").replace(/\s+/g, " ").trim();
+    if (!t) t = "笔记";
+    if (t.length > 60) t = t.slice(0, 60);
+    return t;
+  }
+
+  // 导出单条笔记为 .md：桌面端弹系统保存框（用户自己挑目录），网页端直接下载到默认目录
+  function exportNoteMarkdown(note) {
+    if (!note) return;
+    var name = safeFileName(noteCaption(note)) + ".md";
+    var text = String(note.content || "").replace(/\r\n/g, "\n");
+    if (text && !/\n$/.test(text)) text += "\n"; // 补末尾换行，符合文本文件习惯
+    var api = window.electronAPI;
+    if (api && api.saveFile) {
+      api
+        .saveFile({ defaultName: name, content: text, filters: [{ name: "Markdown", extensions: ["md"] }] })
+        .then(function (r) {
+          if (r && r.ok) toast("已导出 Markdown");
+          else if (r && r.canceled) { /* 用户取消，不必打扰 */ }
+          else toast("导出失败" + (r && r.error ? "：" + r.error : ""));
+        })
+        .catch(function () {
+          toast("导出失败");
+        });
+      return;
+    }
+    var blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    toast("已导出 " + name);
+  }
+
+  var MD_RE = /\.(md|markdown|mdown|mkd|txt)$/i;
+
+  // 导入 Markdown / 纯文本：一个文件 = 一条新笔记。
+  // 内容原样保留、不塞额外标题，这样「导出 → 再导入」是无损可逆的。
+  function importMarkdownFiles(files, onDone) {
+    var arr = [];
+    for (var i = 0; i < files.length; i++) arr.push(files[i]);
+    if (!arr.length) return;
+    var created = 0;
+    var skipped = 0;
+    var pending = arr.length;
+    function finish() {
+      if (--pending > 0) return;
+      if (created) { save(); render(); }
+      toast("导入完成：新增 " + created + " 条 Markdown 笔记" + (skipped ? "，跳过 " + skipped + " 个空文件" : ""));
+      if (onDone) onDone(created);
+    }
+    arr.forEach(function (f) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var text = String(reader.result || "");
+        text = text.replace(/^\uFEFF/, ""); // 去掉 BOM（Windows 记事本常见）
+        text = text.replace(/\r\n/g, "\n");
+        if (!text.trim()) { skipped++; finish(); return; }
+        var now = Date.now();
+        state.notes.push({
+          id: uid(),
+          content: text,
+          pinned: false,
+          markdown: true, // 既然是 .md，默认开 Markdown 预览
+          color: "",
+          createdDate: now,
+          modifiedDate: now,
+          deleted: false,
+          deletedDate: null,
+        });
+        created++;
+        finish();
+      };
+      reader.onerror = function () { skipped++; finish(); };
+      reader.readAsText(f);
+    });
+  }
+
+  // 导入统一入口：按扩展名分流——.json 走整库备份合并，其余当 Markdown / 纯文本新建笔记
+  function handleImportFiles(files) {
+    var arr = [];
+    for (var i = 0; i < files.length; i++) arr.push(files[i]);
+    if (!arr.length) return;
+    var md = arr.filter(function (f) { return MD_RE.test(f.name); });
+    var json = arr.filter(function (f) { return /\.json$/i.test(f.name); });
+    json.forEach(function (f) { importAll(f); });
+    if (md.length) importMarkdownFiles(md);
+    if (!md.length && !json.length) toast("不支持的文件类型（可选 .json 备份或 .md / .txt）");
+  }
+
   function exportAll() {
     var data = JSON.stringify(state.notes, null, 2);
     var blob = new Blob([data], { type: "application/json" });
@@ -1079,6 +1309,29 @@
     if (el.closeBehaviorSelect) el.closeBehaviorSelect.addEventListener("change", function () {
       setCloseBehavior(el.closeBehaviorSelect.value);
     });
+    if (el.trashDaysSelect) el.trashDaysSelect.addEventListener("change", function () {
+      state.trashAutoDays = parseInt(el.trashDaysSelect.value, 10) || 0;
+      store.setItem(TRASHDAYS_KEY, String(state.trashAutoDays));
+      toast(state.trashAutoDays ? "回收站将自动清理超过 " + state.trashAutoDays + " 天的笔记" : "已关闭回收站自动清理");
+    });
+    // 历史版本弹窗
+    if (el.historyClose) el.historyClose.addEventListener("click", function () { el.historyModal.hidden = true; });
+    if (el.historyModal) el.historyModal.addEventListener("click", function (e) {
+      if (e.target === el.historyModal) el.historyModal.hidden = true;
+    });
+    if (el.historyRestore) el.historyRestore.addEventListener("click", restoreHistoryPick);
+    if (el.historyClear) el.historyClear.addEventListener("click", clearNoteHistory);
+    // 同步诊断弹窗
+    if (el.btnDiagnose) el.btnDiagnose.addEventListener("click", openDiagnose);
+    if (el.diagClose) el.diagClose.addEventListener("click", function () { el.diagnoseModal.hidden = true; });
+    if (el.diagnoseModal) el.diagnoseModal.addEventListener("click", function (e) {
+      if (e.target === el.diagnoseModal) el.diagnoseModal.hidden = true;
+    });
+    if (el.diagRerun) el.diagRerun.addEventListener("click", runDiagnose);
+    if (el.diagCopy) el.diagCopy.addEventListener("click", function () {
+      copyText(diagReportLines.join("\n"));
+      toast("诊断报告已复制到剪贴板");
+    });
     el.navDark.addEventListener("click", function () {
       // 点击切换到与当前生效状态相反的模式（显式指定，不再跟随系统）
       setThemeMode(state.dark ? "light" : "dark");
@@ -1099,8 +1352,8 @@
     el.btnLogout.addEventListener("click", logout);
 
     el.importFile.addEventListener("change", function (e) {
-      var f = e.target.files[0];
-      if (f) importAll(f);
+      // 支持多选：.json（整库备份）与 .md/.txt（每条一个文件）可以混着选
+      if (e.target.files && e.target.files.length) handleImportFiles(e.target.files);
       e.target.value = "";
     });
 
@@ -1120,6 +1373,14 @@
     el.editor.addEventListener("input", function () {
       var note = state.notes.filter(function (n) { return n.id === state.currentId; })[0];
       if (!note || note.deleted) return;
+      // 历史快照：记下"这次修改之前"的正文。用 O(1) 的时间间隔先挡掉绝大多数按键，
+      // 只有真的到了 10 分钟才做字符串比较 / 落一条快照，绝不拖慢输入。
+      var prevContent = note.content;
+      var snaps = historyOf(note.id);
+      var lastSnap = snaps[snaps.length - 1];
+      if (!lastSnap || Date.now() - lastSnap.ts >= HISTORY_MIN_GAP_MS) {
+        maybeSnapshot(note.id, prevContent);
+      }
       note.content = el.editor.value;
       note.modifiedDate = Date.now();
       // 内存即时更新，落盘防抖（带图笔记内容大，逐字写盘会卡输入）
@@ -1408,6 +1669,7 @@
     if (el.themeModeSelect) el.themeModeSelect.value = state.themeMode;
     if (el.imageModeSelect) el.imageModeSelect.value = state.imageMode;
     if (el.closeBehaviorSelect) el.closeBehaviorSelect.value = state.closeBehavior;
+    if (el.trashDaysSelect) el.trashDaysSelect.value = String(state.trashAutoDays || 0);
     updateImgFixStatus();
     if (el.davUrl) el.davUrl.value = state.dav.server || "";
     if (el.davUser) el.davUser.value = state.dav.username || "";
@@ -1671,7 +1933,7 @@
     // 跨端墓碑：其他设备永久删除的笔记，本地也清掉，保持回收站一致
     if (res && res.removed && res.removed.length) {
       var removedSet = {};
-      res.removed.forEach(function (id) { removedSet[id] = true; if (state.purged.indexOf(id) === -1) state.purged.push(id); });
+      res.removed.forEach(function (id) { removedSet[id] = true; if (state.purged.indexOf(id) === -1) state.purged.push(id); dropHistory(id); });
       store.setItem(PURGE_KEY, JSON.stringify(state.purged));
       var before = state.notes.length;
       state.notes = state.notes.filter(function (n) { return !removedSet[n.id]; });
@@ -1731,11 +1993,14 @@
             updateImgFixStatus(); // 同步后重新检测外链图片
           }
           state.lastSyncTs = Date.now();
+          state.lastSyncError = "";
           setSyncStatus("已同步 · " + new Date().toLocaleTimeString("zh-CN"));
         }
         return r.shrink;
       })
       .catch(function (e) {
+        // 记下来给「同步诊断」用：出问题时光看底部小字很难定位
+        state.lastSyncError = (e && e.message) || String(e);
         setSyncStatus("同步失败：" + e.message);
         return false;
       })
@@ -1906,9 +2171,299 @@
       { label: "复制内部链接", action: function () { copyInternalLink(note); } },
       { label: "复制内容到剪贴板", action: function () { handleAction("share", note); } },
       { sep: true },
+      { label: "导出为 Markdown 文件…", action: function () { exportNoteMarkdown(note); } },
+      { label: "历史版本…", action: function () { openHistory(note); } },
+      { sep: true },
       { label: "移动到回收站", danger: true, action: function () { handleAction("trash", note); } },
     ];
     showCtxMenu(x, y, items);
+  }
+
+  /* ---------------- 历史版本：查看 / 回滚 ---------------- */
+  var historyNoteId = null;
+  var historyPick = -1; // 在"倒序列表"里的下标（0 = 最新）
+
+  function openHistory(note) {
+    if (!note) return;
+    historyNoteId = note.id;
+    historyPick = -1;
+    if (el.historyHint) {
+      el.historyHint.innerHTML =
+        "「" + escapeHtml(noteCaption(note)) + "」的本地历史快照：同一笔记 10 分钟内最多留一条、共 20 条；" +
+        "含内嵌大图（超过 200KB）的笔记不记录。历史只保存在<b>本机</b>，不参与云同步。";
+    }
+    renderHistoryList();
+    el.historyModal.hidden = false;
+  }
+
+  // 预览前把超长的 base64 图片串折叠掉，否则一条带图笔记的预览就是一屏乱码
+  function snapshotPreviewText(s) {
+    var t = String(s || "").replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+/g, "[内嵌图片]");
+    if (t.length > 8000) t = t.slice(0, 8000) + "\n\n…（预览仅显示前 8000 字符，恢复的是完整内容）";
+    return t;
+  }
+  // 相对时间：历史列表用"多久以前"比绝对时间更好判断
+  function relTime(ts) {
+    var diff = Date.now() - ts;
+    if (diff < 60000) return "刚刚";
+    if (diff < 3600000) return Math.floor(diff / 60000) + " 分钟前";
+    if (diff < 86400000) return Math.floor(diff / 3600000) + " 小时前";
+    return Math.floor(diff / 86400000) + " 天前";
+  }
+
+  function renderHistoryList() {
+    var snaps = historyOf(historyNoteId).slice().reverse(); // 新的排在上面
+    el.historyList.innerHTML = "";
+    if (!snaps.length) {
+      var empty = document.createElement("li");
+      empty.className = "history-empty";
+      empty.textContent = "还没有历史版本。继续编辑几次，这里就会出现可回滚的快照。";
+      el.historyList.appendChild(empty);
+    } else {
+      snaps.forEach(function (snap, idx) {
+        var li = document.createElement("li");
+        if (idx === historyPick) li.className = "active";
+        var t = document.createElement("span");
+        t.className = "h-time";
+        t.textContent = formatDateTime(new Date(snap.ts));
+        var m = document.createElement("span");
+        m.className = "h-meta";
+        m.textContent = snap.content.length + " 字符 · " + relTime(snap.ts);
+        li.appendChild(t);
+        li.appendChild(m);
+        li.addEventListener("click", function () {
+          historyPick = idx;
+          renderHistoryList();
+        });
+        el.historyList.appendChild(li);
+      });
+    }
+    if (historyPick >= 0 && snaps[historyPick]) {
+      el.historyPreview.textContent = snapshotPreviewText(snaps[historyPick].content);
+      if (el.historyRestore) el.historyRestore.disabled = false;
+    } else {
+      el.historyPreview.textContent = snaps.length ? "点击左侧任一版本查看内容。" : "";
+      if (el.historyRestore) el.historyRestore.disabled = true;
+    }
+    if (el.historyClear) el.historyClear.disabled = !snaps.length;
+  }
+
+  function restoreHistoryPick() {
+    var snaps = historyOf(historyNoteId).slice().reverse();
+    var snap = snaps[historyPick];
+    if (!snap) return;
+    var note = state.notes.filter(function (n) { return n.id === historyNoteId; })[0];
+    if (!note) { toast("这条笔记已不存在"); return; }
+    openConfirm(
+      "恢复到该版本",
+      "当前内容将被 " + formatDateTime(new Date(snap.ts)) + " 的版本替换。当前内容也会存成一条历史，随时可以再切回来。",
+      function () {
+        pushSnapshot(note.id, Date.now(), note.content); // 先把"当前内容"留档，恢复也能反悔
+        note.content = snap.content;
+        note.modifiedDate = Date.now();
+        save();
+        el.editor.value = note.content;
+        render();
+        el.historyModal.hidden = true;
+        toast("已恢复到该版本", "撤销", function () {
+          // 撤销恢复：把刚才那条快照再换回来
+          var back = historyOf(note.id)[historyOf(note.id).length - 1];
+          if (!back) return;
+          note.content = back.content;
+          note.modifiedDate = Date.now();
+          save();
+          render();
+          toast("已撤销恢复");
+        });
+      }
+    );
+  }
+
+  function clearNoteHistory() {
+    if (!historyNoteId) return;
+    openConfirm("清空该笔记的历史", "只会删除本机保存的历史快照，笔记正文不受影响。", function () {
+      dropHistory(historyNoteId);
+      historyPick = -1;
+      renderHistoryList();
+      toast("已清空该笔记的历史");
+    });
+  }
+
+  /* ---------------- 同步诊断 ----------------
+     目的：把"同步不工作"这种模糊抱怨，变成一屏能看懂的检查结论。
+     全部是只读探测（health / 增量拉取），不会修改服务端数据。 */
+  var diagLines = [];
+
+  function fmtBytes(n) {
+    if (!n) return "0 B";
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1024 / 1024).toFixed(1) + " MB";
+  }
+
+  function diagAdd(level, title, detail) {
+    if (!el.diagList) return;
+    var row = document.createElement("div");
+    row.className = "diag-item " + level;
+    var ico = document.createElement("span");
+    ico.className = "diag-ico";
+    ico.textContent = level === "ok" ? "✓" : level === "warn" ? "!" : "✕";
+    var body = document.createElement("div");
+    body.className = "diag-body";
+    var h = document.createElement("div");
+    h.className = "diag-title";
+    h.textContent = title;
+    body.appendChild(h);
+    if (detail) {
+      var d = document.createElement("div");
+      d.className = "diag-detail";
+      d.textContent = detail;
+      body.appendChild(d);
+    }
+    row.appendChild(ico);
+    row.appendChild(body);
+    el.diagList.appendChild(row);
+    diagLines.push((level === "ok" ? "[OK] " : level === "warn" ? "[!]  " : "[X]  ") + title + (detail ? " — " + detail : ""));
+  }
+
+  function openDiagnose() {
+    if (el.accountModal) el.accountModal.hidden = true;
+    if (!el.diagnoseModal) return;
+    el.diagnoseModal.hidden = false;
+    runDiagnose();
+  }
+
+  function runDiagnose() {
+    if (!el.diagList) return;
+    el.diagList.innerHTML = "";
+    diagLines = [];
+    var server = getServerUrl();
+    diagLines.push("简易笔记 同步诊断 · " + new Date().toLocaleString("zh-CN"));
+    diagLines.push("运行环境：" + (window.electronAPI ? "桌面客户端" : "浏览器 / PWA"));
+    diagLines.push("——");
+
+    diagAdd("ok", "服务端地址", server);
+    diagAdd(state.token ? "ok" : "warn", "登录状态",
+      state.token ? "已登录：" + state.user : "未登录：笔记只存在本机，不上传、也不从其它设备拉取");
+
+    // 待推送积压 / 体积（内嵌图片多时最容易踩 413 或超时）
+    var pending = [];
+    var pendingBytes = 0;
+    try {
+      pending = notesToPush();
+      pendingBytes = JSON.stringify(pending.map(serializeNote)).length;
+    } catch (e) {}
+    if (!pending.length) {
+      diagAdd("ok", "待推送", "无积压");
+    } else if (pendingBytes > 30 * 1024 * 1024) {
+      diagAdd("err", "待推送", pending.length + " 条，约 " + fmtBytes(pendingBytes) +
+        "：体积过大，服务端很可能拒收（413）。建议调大服务端 BODY_LIMIT，或把内嵌图片改成引用路径");
+    } else if (pendingBytes > 5 * 1024 * 1024) {
+      diagAdd("warn", "待推送", pending.length + " 条，约 " + fmtBytes(pendingBytes) + "：偏大，同步会慢一些");
+    } else {
+      diagAdd("warn", "待推送", pending.length + " 条，约 " + fmtBytes(pendingBytes) + "（下次同步时上传）");
+    }
+
+    var legacy = state.legacyServer;
+    diagAdd(legacy ? "warn" : "ok", "同步模式",
+      legacy ? "服务端是旧版（不返回 serverTime），已退化为 30 秒一次全量轮询" : "增量同步（3 秒一轮，未改动时几乎不耗流量）");
+    diagAdd("ok", "增量游标", "since = " + (state.since || 0) + " · 已知服务端笔记数 " + (state.serverTotal || 0));
+
+    var localBytes = 0;
+    try { localBytes = JSON.stringify(state.notes).length; } catch (e) {}
+    var histBytes = 0;
+    try { histBytes = JSON.stringify(state.history).length; } catch (e) {}
+    diagAdd(localBytes > 40 * 1024 * 1024 ? "warn" : "ok", "本地数据",
+      state.notes.length + " 条笔记，约 " + fmtBytes(localBytes) + "；历史快照约 " + fmtBytes(histBytes));
+
+    diagAdd("ok", "上次成功同步", state.lastSyncTs ? new Date(state.lastSyncTs).toLocaleString("zh-CN") : "本次启动后还没有成功同步过");
+    if (state.lastSyncError) diagAdd("err", "上次同步错误", state.lastSyncError);
+
+    // ① 服务端可达性（8 秒超时，别让人干等）
+    function probeHealth() {
+      return new Promise(function (resolve) {
+        var t0 = Date.now();
+        var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+        var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 8000) : null;
+        fetch(server + "/api/health", { signal: ctrl ? ctrl.signal : undefined })
+          .then(function (r) {
+            var ms = Date.now() - t0;
+            if (timer) clearTimeout(timer);
+            if (!r.ok) {
+              diagAdd("warn", "服务端可达", "有响应但状态异常：HTTP " + r.status + " · " + ms + " ms（检查反向代理 / 路径前缀）");
+              return r.text();
+            }
+            diagAdd("ok", "服务端可达", "HTTP " + r.status + " · 耗时 " + ms + " ms");
+            return r.text();
+          })
+          .then(function (txt) {
+            if (!txt) return;
+            var d = null;
+            try { d = JSON.parse(txt); } catch (e) {}
+            if (!d) return;
+            var parts = [];
+            if (d.version) parts.push("服务端 " + d.version);
+            if (typeof d.users === "number") parts.push("账号数 " + d.users);
+            if (d.registration === false) parts.push("注册已关闭");
+            if (parts.length) diagAdd("ok", "服务端信息", parts.join(" · "));
+          })
+          .catch(function (e) {
+            if (timer) clearTimeout(timer);
+            var why = e && e.name === "AbortError" ? "8 秒无响应（超时）" : "网络层失败（DNS / 端口 / 防火墙 / 服务未启动 / 证书问题）";
+            diagAdd("err", "服务端可达", "连不上 " + server + " · " + why);
+          })
+          .then(resolve);
+      });
+    }
+
+    // ② 令牌有效性：读一次增量（只读，不改任何数据）
+    function probeAuth() {
+      if (!state.token) return Promise.resolve();
+      return fetch(server + "/api/notes?since=" + (state.since || 0), { headers: authHeaders() })
+        .then(function (r) {
+          if (r.status === 401 || r.status === 403) {
+            diagAdd("err", "令牌有效性", "登录已失效（HTTP " + r.status + "）：请退出登录后重新登录");
+            return null;
+          }
+          if (!r.ok) {
+            diagAdd("warn", "令牌有效性", "接口返回 HTTP " + r.status + "，暂时无法验证");
+            return null;
+          }
+          diagAdd("ok", "令牌有效性", "通过（账号 " + state.user + "）");
+          return r.json();
+        })
+        .then(function (d) {
+          if (!d) return;
+          if (typeof d.total === "number") {
+            var same = d.total === state.serverTotal;
+            diagAdd(same ? "ok" : "warn", "服务端笔记数",
+              d.total + " 条" + (same ? "（与本地记录一致）" : "（本地记录为 " + state.serverTotal + "，若服务端变少会自动全量恢复）"));
+          }
+          if (typeof d.serverTime === "number") {
+            diagAdd("ok", "服务端时间", new Date(d.serverTime).toLocaleString("zh-CN") + "（用作增量游标）");
+          }
+        })
+        .catch(function () {
+          diagAdd("warn", "令牌有效性", "无法验证（网络不可达）");
+        });
+    }
+
+    probeHealth()
+      .then(probeAuth)
+      .then(function () {
+        var bad = diagLines.filter(function (l) { return l.indexOf("[X]") === 0; }).length;
+        if (bad) {
+          diagAdd("warn", "结论", "上面标 ✕ 的 " + bad + " 项需要先解决。点「复制报告」可以把完整结果发给我排查。");
+        } else if (!state.token) {
+          diagAdd("ok", "结论", "本地功能正常，但没登录云同步——想让多设备同步，去「云同步」里登录。");
+        } else {
+          diagAdd("ok", "结论", pending.length
+            ? "链路正常，有 " + pending.length + " 条待上传（最长 3 秒内自动推送）。"
+            : "链路正常，本地与服务端已一致。");
+        }
+        diagLines.push("——");
+        diagLines.push("提示：报告里包含你的服务器地址与用户名，发给别人前可以先把这两行删掉。");
+      });
   }
 
   function copyInternalLink(note) {
@@ -2210,6 +2765,8 @@
     cacheDom();
     load();
     filterPurged(); // 启动即过滤墓碑，防止已删笔记复活
+    // 回收站自动清理（默认关闭）：只在启动时跑一次，超过设定天数的直接永久删除
+    var autoPurged = autoPurgeTrash();
     applySettings();
     bindEvents();
     updateAccountUI();
@@ -2301,6 +2858,11 @@
       });
     }
     initVersionAndUpdate();
+    if (autoPurged > 0) {
+      setTimeout(function () {
+        toast("回收站已自动清理 " + autoPurged + " 条超过 " + state.trashAutoDays + " 天的笔记");
+      }, 1500);
+    }
   }
 
   // ============ 版本号显示与更新提示（仅 Electron 环境） ============

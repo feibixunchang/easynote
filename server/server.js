@@ -14,6 +14,9 @@ const path = require("path");
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
+// 服务端版本（不跟桌面端版本号走）：客户端「同步诊断」会读它，
+// 方便判断连的是不是旧版服务端（例如不支持增量同步的老版本）。
+const SERVER_VERSION = "1.3.0";
 const SECRET = process.env.JWT_SECRET || "simplenote-zh-dev-secret-change-me";
 // 请求体上限：客户端「一键修复」会把图片转成 base64 内嵌进笔记，同步时整批笔记
 // （含内嵌图片）可能达数 MB~数十 MB，Express 默认 100kb 会返回 413 导致同步失败。
@@ -203,7 +206,23 @@ app.use(function (req, res, next) {
   next();
 });
 
-app.get("/api/health", (req, res) => res.json({ ok: true }));
+app.get("/api/health", (req, res) => {
+  // 只暴露"够用"的信息：版本、是否还允许注册、账号数。
+  // 客户端用它判断连通性 + 服务端新旧，不涉及任何用户数据。
+  let users = 0;
+  try {
+    users = Object.keys(loadUsers()).length;
+  } catch (e) {
+    users = 0;
+  }
+  res.json({
+    ok: true,
+    server: "easynote-sync",
+    version: SERVER_VERSION,
+    users,
+    registration: registrationAllowed(users),
+  });
+});
 
 // 注册
 app.post("/api/register", (req, res) => {

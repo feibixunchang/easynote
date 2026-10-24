@@ -22,8 +22,9 @@
   var PUSHED_KEY = "simplenote_zh_pushed";
   var TOTAL_KEY = "simplenote_zh_total";
   var DAV_KEY = "simplenote_zh_webdav";
+  var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.9";
+  var APP_VERSION = "1.0.10";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -104,6 +105,8 @@
     query: "",
     activeTag: null,
     view: "notes", // 'notes' | 'trash'
+    trashAutoDays: 0, // 回收站自动清理天数（0 = 关闭）
+    selected: {}, // 回收站里勾选的笔记 id（批量恢复 / 批量删除）
     sort: "modified",
     themeMode: "auto",
     systemDark: false,
@@ -142,6 +145,8 @@
     }
     state.fontFamily = store.getItem(FONT_KEY) || "";
     state.fontSize = parseInt(store.getItem(FONTSIZE_KEY) || "16", 10) || 16;
+    // 回收站自动清理：默认关闭（自动删数据必须用户明确选择）
+    state.trashAutoDays = parseInt(store.getItem(TRASHDAYS_KEY) || "0", 10) || 0;
     state.serverUrl = store.getItem(SERVER_KEY) || "http://localhost:3000";
     state.token = store.getItem(TOKEN_KEY) || "";
     state.user = store.getItem(USER_KEY) || "";
@@ -429,6 +434,12 @@
     el.accName = document.getElementById("accName");
     el.syncStatus = document.getElementById("syncStatus");
     el.btnEmptyTrash = document.getElementById("btnEmptyTrash");
+    el.trashDaysSelect = document.getElementById("trashDaysSelect");
+    el.trashBar = document.getElementById("trashBar");
+    el.trashAll = document.getElementById("trashAll");
+    el.trashCount = document.getElementById("trashCount");
+    el.trashRestoreSel = document.getElementById("trashRestoreSel");
+    el.trashPurgeSel = document.getElementById("trashPurgeSel");
     el.appbarTitle = document.getElementById("appbarTitle");
     el.btnDrawer = document.getElementById("btnDrawer");
     el.drawer = document.getElementById("drawer");
@@ -534,6 +545,7 @@
       hint.textContent = state.view === "trash" ? "回收站为空" :
         (state.query || state.activeTag ? "没有匹配的笔记" : "还没有笔记，点右下角「＋」新建");
       el.noteList.appendChild(hint);
+      updateTrashBar();
       return;
     }
     list.forEach(function (n) {
@@ -587,7 +599,18 @@
 
       // 回收站：列表里直接给一个「♻ 恢复」，不用先进详情页再点工具条
       if (state.view === "trash") {
-        item.classList.add("is-trash");
+        item.classList.add("is-trash", "has-check");
+        // 勾选框：点它只切换选中，不要顺带打开笔记（移动端很容易点错）
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "card-check";
+        cb.checked = !!state.selected[n.id];
+        cb.setAttribute("aria-label", "选择这条笔记");
+        cb.addEventListener("click", function (e) {
+          if (e && e.stopPropagation) e.stopPropagation();
+          setSelected(n.id, cb.checked);
+        });
+        item.appendChild(cb);
         var restoreBtn = document.createElement("button");
         restoreBtn.type = "button";
         restoreBtn.className = "card-restore";
@@ -606,6 +629,102 @@
 
       el.noteList.appendChild(item);
     });
+    updateTrashBar();
+  }
+
+  /* ---------------- 回收站：勾选 / 全选 / 批量操作 ---------------- */
+  function setSelected(id, on) {
+    if (on) state.selected[id] = true;
+    else delete state.selected[id];
+    updateTrashBar();
+  }
+
+  function updateTrashBar() {
+    var inTrash = state.view === "trash";
+    // 离开回收站就清空勾选，避免下次进来"莫名其妙已选了几条"
+    if (!inTrash) state.selected = {};
+    if (el.trashBar) el.trashBar.hidden = !inTrash;
+    if (!inTrash) return;
+    var list = getNotes();
+    var alive = {};
+    list.forEach(function (n) { alive[n.id] = true; });
+    // 搜索 / 刷新后，把已经不在列表里的勾选清掉，避免"看不见却被删掉"
+    Object.keys(state.selected).forEach(function (id) {
+      if (!alive[id]) delete state.selected[id];
+    });
+    var sel = list.filter(function (n) { return state.selected[n.id]; }).length;
+    if (el.trashCount) el.trashCount.textContent = "已选 " + sel + " / " + list.length + " 条";
+    if (el.trashRestoreSel) el.trashRestoreSel.disabled = sel === 0;
+    if (el.trashPurgeSel) el.trashPurgeSel.disabled = sel === 0;
+    if (el.trashAll) {
+      el.trashAll.checked = list.length > 0 && sel === list.length;
+      el.trashAll.indeterminate = sel > 0 && sel < list.length;
+      el.trashAll.disabled = list.length === 0;
+    }
+  }
+
+  function selectedTrashNotes() {
+    return getNotes().filter(function (n) { return state.selected[n.id]; });
+  }
+
+  function restoreSelected() {
+    var sel = selectedTrashNotes();
+    if (!sel.length) return;
+    var now = Date.now();
+    sel.forEach(function (n) { n.deleted = false; n.deletedDate = null; n.modifiedDate = now; });
+    state.selected = {};
+    save();
+    renderAll();
+    toast("已恢复 " + sel.length + " 条笔记");
+  }
+
+  function purgeSelected() {
+    var sel = selectedTrashNotes();
+    if (!sel.length) return;
+    var ids = sel.map(function (n) { return n.id; });
+    openConfirm(
+      "永久删除 " + ids.length + " 条",
+      "这 " + ids.length + " 条笔记将被永久删除、无法恢复，并从所有设备上一起删除。",
+      function () {
+        purgeMany(ids);
+        toast("已永久删除 " + ids.length + " 条");
+      }
+    );
+  }
+
+  // 回收站自动清理：启动时把超过设定天数的已删笔记永久删除（墓碑 + 上报服务端）
+  function autoPurgeTrash() {
+    var days = state.trashAutoDays || 0;
+    if (days <= 0) return 0;
+    var cutoff = Date.now() - days * 86400000;
+    var ids = state.notes
+      .filter(function (n) { return !!n.deleted && (n.deletedDate || n.modifiedDate || 0) < cutoff; })
+      .map(function (n) { return n.id; });
+    if (!ids.length) return 0;
+    ids.forEach(function (id) {
+      if (state.purged.indexOf(id) === -1) state.purged.push(id);
+    });
+    store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+    state.notes = state.notes.filter(function (n) { return ids.indexOf(n.id) === -1; });
+    if (ids.indexOf(state.currentId) !== -1) state.currentId = null;
+    saveLocalOnly();
+    purgeOnServer(ids);
+    return ids.length;
+  }
+
+  // 统一入口：墓碑记账 + 本地删除 + 上报服务端 + 保存渲染
+  function purgeMany(ids) {
+    if (!ids || !ids.length) return;
+    ids.forEach(function (id) {
+      if (state.purged.indexOf(id) === -1) state.purged.push(id);
+      delete state.selected[id];
+    });
+    store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+    state.notes = state.notes.filter(function (n) { return ids.indexOf(n.id) === -1; });
+    if (ids.indexOf(state.currentId) !== -1) state.currentId = null;
+    purgeOnServer(ids);
+    save();
+    renderAll();
   }
 
   var LONG_PRESS_MS = 480;
@@ -1787,6 +1906,7 @@
   }
   function refreshSettingsUI() {
     if (el.themeModeSelect) el.themeModeSelect.value = state.themeMode;
+    if (el.trashDaysSelect) el.trashDaysSelect.value = String(state.trashAutoDays || 0);
     if (el.fontSizeSelect) el.fontSizeSelect.value = String(state.fontSize || 16);
     if (el.fontSelect) el.fontSelect.value = state.fontFamily || "";
     if (el.fontCustom) el.fontCustom.value = state.fontFamily || "";
@@ -1974,6 +2094,26 @@
       }, { passive: true });
     })();
 
+    if (el.trashDaysSelect) {
+      el.trashDaysSelect.addEventListener("change", function () {
+        state.trashAutoDays = parseInt(el.trashDaysSelect.value, 10) || 0;
+        store.setItem(TRASHDAYS_KEY, String(state.trashAutoDays));
+        toast(state.trashAutoDays ? "回收站将自动清理超过 " + state.trashAutoDays + " 天的笔记" : "已关闭回收站自动清理");
+      });
+    }
+
+    // 回收站批量操作
+    if (el.trashAll) {
+      el.trashAll.addEventListener("change", function () {
+        var list = getNotes();
+        state.selected = {};
+        if (el.trashAll.checked) list.forEach(function (n) { state.selected[n.id] = true; });
+        renderList();
+      });
+    }
+    if (el.trashRestoreSel) el.trashRestoreSel.addEventListener("click", restoreSelected);
+    if (el.trashPurgeSel) el.trashPurgeSel.addEventListener("click", purgeSelected);
+
     // 清空回收站（本地 + 上报服务端，跨端一致）
     if (el.btnEmptyTrash) {
       el.btnEmptyTrash.addEventListener("click", function () {
@@ -2147,6 +2287,7 @@
     cacheDom();
     load();
     filterPurged();
+    var autoPurged = autoPurgeTrash(); // 回收站自动清理（默认关闭）
     applySettings();
     bindEvents();
     updateAccountUI();
@@ -2184,8 +2325,14 @@
     var splash = plugin("SplashScreen");
     if (splash && splash.hide) splash.hide();
 
+    if (autoPurged > 0) {
+      setTimeout(function () {
+        toast("回收站已自动清理 " + autoPurged + " 条超过 " + state.trashAutoDays + " 天的笔记");
+      }, 1500);
+    }
+
     // 供测试钩子
-    window.__app = { state: state, renderAll: renderAll, syncAll: syncAll, api: api };
+    window.__app = { state: state, renderAll: renderAll, syncAll: syncAll, api: api, autoPurgeTrash: autoPurgeTrash };
   }
 
   init();

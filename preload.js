@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   closeWindow: function () {
     return ipcRenderer.invoke("close-window");
   },
+  saveFile: function (opts) {
+    return ipcRenderer.invoke("save-file", opts);
+  },
   pickImage: function (mode) {
     return ipcRenderer.invoke("pick-image", mode);
   },

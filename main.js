@@ -770,6 +770,32 @@ ipcMain.handle("write-clipboard", function (_e, text) {
   }
 });
 
+// 保存文本到本地文件（导出 Markdown 笔记）：弹系统保存对话框，用户选路径后写盘。
+// 返回 { ok, path, canceled }：取消不算失败，渲染端据此不弹错误提示。
+ipcMain.handle("save-file", async function (_e, opts) {
+  opts = opts || {};
+  var content = typeof opts.content === "string" ? opts.content : "";
+  // 文件名里不能有路径分隔符 / 系统保留字符，统一替换掉
+  var defaultName = String(opts.defaultName || "note.md").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_");
+  var filters = Array.isArray(opts.filters) ? opts.filters : [{ name: "Markdown", extensions: ["md"] }];
+  var win = BrowserWindow.getFocusedWindow() || mainWindow;
+  var dialogOpts = {
+    title: "保存文件",
+    defaultPath: path.join(app.getPath("documents"), defaultName),
+    filters: filters,
+  };
+  try {
+    var res = win
+      ? await dialog.showSaveDialog(win, dialogOpts)
+      : await dialog.showSaveDialog(dialogOpts);
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+    await fs.promises.writeFile(res.filePath, content, "utf8");
+    return { ok: true, path: res.filePath };
+  } catch (err) {
+    return { ok: false, canceled: false, error: String((err && err.message) || err) };
+  }
+});
+
 // 窗口控制：供 HTML 标题栏里的自定义按钮调用（Win/Linux 显示，macOS 用原生交通灯）
 // 返回一个对象而不是裸字符串，方便渲染进程一次拿到"谁是系统按钮、谁是 HTML 按钮"：
 //   overlay=true  → 系统已经画好了最小化/最大化/关闭（Windows），HTML 那三个按钮必须隐藏

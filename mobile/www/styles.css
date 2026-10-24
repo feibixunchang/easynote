@@ -332,6 +332,44 @@ body.dark .sync-pill.ok { color: #4ade80; }
   cursor: pointer;
 }
 .card-restore:active { background: rgba(58, 122, 254, 0.24); }
+
+/* ---------- 回收站多选 ---------- */
+/* 卡片左侧让出复选框位置；右侧仍留给「♻ 恢复」 */
+.note-card.is-trash.has-check { padding-left: 44px; }
+.card-check {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.trash-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text2);
+}
+.trash-all { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; }
+.trash-all input { width: 18px; height: 18px; accent-color: var(--accent); }
+.trash-count { font-size: 12.5px; }
+.trash-bar .text-btn {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-weight: 600;
+}
+.trash-bar .text-btn.danger { color: var(--danger); }
+.trash-bar .text-btn:disabled { opacity: 0.45; }
 /* 选中态：与桌面端一致用「淡蓝填充」表示，而不是只描一圈边（描边看起来像没铺满） */
 .note-card.selected {
   background: rgba(58, 122, 254, 0.12);

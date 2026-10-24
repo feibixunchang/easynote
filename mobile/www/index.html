@@ -51,6 +51,18 @@
         </span>
       </div>
 
+      <!-- 回收站批量操作条（只在回收站视图出现）：全选 / 批量恢复 / 批量永久删除 -->
+      <div class="trash-bar" id="trashBar" hidden>
+        <label class="trash-all">
+          <input type="checkbox" id="trashAll" />
+          <span>全选</span>
+        </label>
+        <span class="trash-count" id="trashCount">已选 0 条</span>
+        <span class="flex-spacer"></span>
+        <button type="button" class="text-btn" id="trashRestoreSel" disabled>恢复</button>
+        <button type="button" class="text-btn danger" id="trashPurgeSel" disabled>删除</button>
+      </div>
+
       <main class="note-list" id="noteList"></main>
 
       <button class="fab" id="newNoteBtn" title="新建笔记">＋</button>
@@ -157,6 +169,15 @@
 
       <div class="set-group">
         <div class="set-group-title">💾 数据</div>
+        <label class="set-field"><span>回收站自动清理</span>
+          <select id="trashDaysSelect">
+            <option value="0">关闭（一直保留）</option>
+            <option value="7">7 天后自动清理</option>
+            <option value="30">30 天后自动清理</option>
+            <option value="90">90 天后自动清理</option>
+          </select>
+        </label>
+        <p class="set-hint">开启后，移入回收站超过设定天数的笔记会在下次启动时<b>永久删除</b>（所有设备同步生效）。默认关闭。</p>
         <div class="set-btns">
           <button class="btn" id="btnExport">导出备份（JSON）</button>
           <button class="btn" id="btnImport">导入备份</button>
