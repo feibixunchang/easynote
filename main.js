@@ -362,22 +362,61 @@ function createWindow() {
   // 关闭窗口：按用户设置决定「隐藏到托盘」还是「直接退出」。
   // 老版本一律隐藏到托盘，Windows 用户点 ✕ 后窗口消失、程序还在后台，
   // 很容易被理解成"点了没反应 / 关不掉"，所以这里做成可配置，并在第一次隐藏时给一次提示。
+  //
+  // 2026-10-25 修复（Windows 1.2.20 仍反馈"最小化/最大化好使，只有关闭 ✕ 不好使"）：
+  // 最小化与最大化由系统原生覆盖层直接处理、不经 JS，✕ 必须走 JS 的 close 事件链，
+  // 所以问题只可能出在这条链路上。这里把关闭请求收敛到 handleCloseRequest() 统一处理，
+  // 并加三层保险（详见该函数注释）。
+  //
+  // 【Electron 内部机制（v31.7.7 源码取证）】
+  // 原生覆盖层的 ✕ 与 最小化/最大化 走的是两条完全不同的路径：
+  //   最小化/最大化 → views::Widget::Minimize / Maximize → 纯 Chromium 处理，完全不经过 Electron JS；
+  //   ✕            → views::Widget::CloseWithReason(kCloseButtonClicked)
+  //                 → NativeWindow::NotifyWindowCloseButtonClicked()，这个函数是【两阶段】的：
+  //     阶段①：observer.WillCloseWindow() → BaseWindow::Emit("close") → 就是下面这个 handler。
+  //             若这里 preventDefault ⇒ prevent_default=true ⇒ WindowCloseCancelled，阶段②不会执行。
+  //     阶段②：（仅当阶段①没被拦截时）observer.OnCloseButtonClicked()
+  //             → BrowserWindow::OnCloseButtonClicked() → 关闭的是 webContents（页面）而不是窗口，
+  //               页面被拆掉后再走 WebContentsDestroyed() → CloseImmediately()。
+  // ⇒ 推论：preventDefault() 必须【一定被执行到】。只要它被调用，阶段②就不会发生；
+  //           万一没被调用（例如 handler 在此之前抛异常），Electron 会把页面在背后拆掉，
+  //           行为完全不可预期（这正是"点 ✕ 没反应"最隐蔽的一种成因）。
+  // ⇒ 所以下面的顺序是：先记日志 → 再 preventDefault → 最后才做实际处理，
+  //    保证任何后续异常都不会让 Electron 走到阶段②。
   win.on("close", function (e) {
-    saveWindowState(win);
-    if (app.isQuitting) return; // 托盘「退出」/ 更新安装：真的退出
-    if (!closeToTray) {
-      // 用户选了「关闭即退出」：这里必须真的把进程退掉。
-      // 只置标记不 quit 的话，窗口关了但进程还在（window-all-closed 是有意留空的），
-      // 结果又变成"窗口没了、程序还在后台"——正是这次要修掉的问题。
-      app.isQuitting = true;
-      app.quit();
-      return;
-    }
+    // 独立日志：用来区分"close 事件到底有没有派发"。
+    // close.log 里如果只有「收到 WM_CLOSE」而没有「收到 close 事件」，
+    // 就说明问题出在 Electron 的事件派发环节，而不是我们的处理逻辑。
+    try { closeLog("收到 close 事件 isQuitting=" + !!app.isQuitting); } catch (err) {}
+    try { saveWindowState(win); } catch (err) {}
+    // 真正的退出流程（托盘「退出」/ 更新安装）：放行，让窗口正常关闭
+    if (app.isQuitting) return;
+    // 其余情况一律先拦住，后面的处理都交给 handleCloseRequest。
+    // 注意：preventDefault 必须放在所有可能抛异常的代码之前。
     e.preventDefault();
-    win.hide();
-    showTrayHintOnce();
-    return false;
+    handleCloseRequest(win);
   });
+
+  // Windows 额外保险：在操作系统层面直接钩住 WM_CLOSE（系统关闭请求）。
+  // Alt+F4、任务栏右键「关闭窗口」、程序化 close 都会发这条消息。
+  // 原生覆盖层的 ✕ 是 Chromium 自己画的按钮、不发 WM_CLOSE，所以它走不到这一层 ——
+  // 这一层针对的是"系统级关闭请求"这条独立路径，属于多路兜底。
+  // hookWindowMessage 的回调返回值会被丢弃（不会吞掉消息），纯通知语义，安全可用。
+  if (process.platform === "win32") {
+    try {
+      win.hookWindowMessage(0x0010, function () {
+        // WM_CLOSE
+        setImmediate(function () {
+          try {
+            if (!win.isDestroyed() && win.isVisible()) {
+              try { closeLog("收到 WM_CLOSE"); } catch (err) {}
+              handleCloseRequest(win);
+            }
+          } catch (err) {}
+        });
+      });
+    } catch (err) {}
+  }
 
   // 拖拽 / 缩放窗口后，防抖保存尺寸与位置
   let saveTimer = null;
@@ -391,6 +430,96 @@ function createWindow() {
   return win;
 }
 
+/* ============ 关闭请求的统一处理 ============ */
+// Windows 1.2.20 反馈："最小化和最大化都好使，只有关闭 ✕ 不好使"。
+// 关键线索：最小化/最大化由系统原生覆盖层直接处理、根本不经过 JS，
+// 只有 ✕ 必须走 JS 的 close 事件链 —— 所以问题只可能出在这条链路上。
+// 这里把关闭请求收敛到一个统一入口，并叠三层保险：
+//   1) 主路径：BrowserWindow 的 close 事件（preventDefault 后由我们自己处理）；
+//   2) Windows 兜底：hookWindowMessage(WM_CLOSE) 在系统消息层直接拦一次
+//      （覆盖 Alt+F4 / 任务栏「关闭窗口」等系统级关闭请求）；
+//   3) 事后校验：隐藏之后确认窗口确实不可见了；没消失就干脆退出程序，
+//      绝不让用户对着一个"按了没反应"的窗口发愣。
+// 另外还有一层"可观测性"：每一步都写进 userData/close.log，
+// 万一某台机器上还是复现，可以直接看日志定位到卡在哪一步，不用再靠猜。
+let closingInProgress = false;
+let lastCloseRequestAt = 0;
+
+function handleCloseRequest(win) {
+  if (!win || win.isDestroyed()) return;
+  const now = Date.now();
+  // 幂等：close 事件与 WM_CLOSE 钩子可能先后到达（顺序取决于平台），1 秒内只处理一次
+  if (closingInProgress || now - lastCloseRequestAt < 1000) return;
+  lastCloseRequestAt = now;
+  closingInProgress = true;
+  try {
+    closeLog("关闭请求：closeToTray=" + closeToTray + " isQuitting=" + !!app.isQuitting);
+  } catch (e) {}
+
+  if (app.isQuitting) {
+    // 托盘「退出」/ 更新安装：走真正的退出流程，放行关闭
+    closingInProgress = false;
+    return;
+  }
+
+  if (!closeToTray) {
+    // 「关闭即退出」：先把本次关闭拦下，再由 app.quit() 走标准退出流程。
+    // 直接在 close 事件里调 app.quit() 会和窗口自身的关闭流程打架（重入），
+    // 结果往往是窗口关了、进程还赖着不走 —— 也就是用户看到的"点了 ✕ 没反应"。
+    //
+    // 这里用 setImmediate 推迟一拍：等本次 close 事件彻底结束后再退出，
+    // 彻底避开"关闭过程中重入 app.quit()"这个坑。
+    app.isQuitting = true;
+    setImmediate(function () {
+      try { app.quit(); } catch (e) {}
+    });
+    closingInProgress = false;
+    return;
+  }
+
+  // 「最小化到托盘」：隐藏窗口，并给出一次明确可见的提示。
+  //
+  // 注意：preventDefault 之后渲染进程的 beforeunload 不会触发，
+  // 也就是说编辑器里防抖中的最后一次改动不会被写盘 —— 隐藏到托盘会丢掉最后 600ms 的输入。
+  // 所以这里先通知渲染进程把待保存内容立刻落盘（窗口隐藏后渲染进程仍在运行，能正常处理）。
+  try {
+    if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
+      win.webContents.send("flush-editor-save");
+    }
+  } catch (e) {}
+  try { win.hide(); } catch (e) {}
+  showTrayHintOnce();
+
+  // 事后校验：50ms 后窗口若仍可见，说明隐藏没生效 → 直接退出程序。
+  // 与其让用户以为程序卡死，不如让程序真的关掉。
+  setTimeout(function () {
+    try {
+      if (!win.isDestroyed() && win.isVisible()) {
+        closeLog("隐藏未生效（窗口仍可见）→ 改为直接退出程序");
+        app.isQuitting = true;
+        app.quit();
+      } else {
+        closeLog("已隐藏到托盘");
+      }
+    } catch (e) {}
+    closingInProgress = false;
+  }, 50);
+}
+
+// 关闭相关的诊断日志：写到 userData/close.log（滚动，超过 200KB 就重写）。
+// 用途：Windows 上"点了 ✕ 没反应"这类只在特定系统/驱动组合上出现的问题，
+// 光靠猜是猜不出来的 —— 有日志就能直接看到关闭请求走到了哪一步、哪一步没生效。
+function closeLog(msg) {
+  try {
+    const f = path.join(app.getPath("userData"), "close.log");
+    const line = new Date().toISOString() + " " + msg + "\n";
+    let size = 0;
+    try { size = fs.statSync(f).size; } catch (e) {}
+    if (size > 200 * 1024) fs.writeFileSync(f, line);
+    else fs.appendFileSync(f, line);
+  } catch (e) {}
+}
+
 /* ============ 托盘图标 ============ */
 let tray = null;
 let mainWindow = null;
@@ -401,14 +530,29 @@ let mainWindow = null;
 let closeToTray = process.platform !== "linux";
 let trayHintShown = false;
 
-// 第一次隐藏到托盘时给一次系统通知，避免用户以为"关不掉 / 程序卡死"
+// 第一次隐藏到托盘时给一次系统提示，避免用户以为"关不掉 / 程序卡死"。
+// Windows 上有两个坑：
+//   1) Notification 需要 AppUserModelID 匹配上已安装的快捷方式，否则系统直接丢弃、什么都不显示；
+//   2) 即便显示出来了，也是通知中心里的一个小横幅，容易被忽略。
+// 所以 Windows 额外用 tray.displayBalloon() 弹一个紧贴托盘图标的气泡 ——
+// 它就浮在托盘旁边，是用户找托盘图标时必然看到的位置，反馈最直接。
 function showTrayHintOnce() {
   if (trayHintShown) return;
   trayHintShown = true;
-  notify(
-    "简易笔记仍在后台运行",
-    "窗口已最小化到系统托盘，点托盘图标可重新打开；右键托盘图标可退出。可在「设置 → 关闭主窗口时」改为直接退出。"
-  );
+  const title = "简易笔记仍在后台运行";
+  const body = "窗口已最小化到系统托盘，点托盘图标可重新打开；右键托盘图标可退出。可在「设置 → 关闭主窗口时」改为直接退出。";
+  notify(title, body);
+  if (process.platform === "win32" && tray && !tray.isDestroyed()) {
+    try {
+      tray.displayBalloon({
+        title: title,
+        content: "程序仍在后台运行（点托盘图标可打开）。若想点 ✕ 就直接退出，可在「设置 → 关闭主窗口时」选择「直接退出程序」。",
+        iconType: "info",
+      });
+    } catch (e) {
+      /* 气泡失败不影响功能，通知已经发过 */
+    }
+  }
 }
 
 function getTrayIcon() {
@@ -813,14 +957,9 @@ ipcMain.handle("minimize-window", function () {
 });
 ipcMain.handle("close-window", function () {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (!closeToTray) {
-    // 用户选择"关闭即退出"：走真正的退出流程
-    app.isQuitting = true;
-    app.quit();
-    return;
-  }
-  // 走标准 close 流程：触发 win.on("close")，隐藏到托盘（与点 ✕ 行为一致）
-  mainWindow.close();
+  // 与点 ✕ 完全同一条路径：统一走 handleCloseRequest，
+  // 避免这里再单独实现一套"直接退出"逻辑导致两边行为不一致。
+  handleCloseRequest(mainWindow);
 });
 // 用户在设置里切换「关闭主窗口时」的行为
 ipcMain.handle("set-close-behavior", function (_e, toTray) {

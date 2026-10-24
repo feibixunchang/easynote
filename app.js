@@ -1400,6 +1400,12 @@
     // 失焦 / 关窗前把待落盘的改动写掉，避免最后 600ms 内的输入丢失
     el.editor.addEventListener("blur", flushEditorSave);
     window.addEventListener("beforeunload", flushEditorSave);
+    // 主进程「关闭到托盘」时会先发这条通道让我们立刻落盘：
+    // close 事件被 preventDefault 之后 beforeunload 不会触发，
+    // 靠这条通道保证编辑器里防抖中的最后一次输入不会丢。
+    if (window.electronAPI && window.electronAPI.onFlushEditorSave) {
+      window.electronAPI.onFlushEditorSave(flushEditorSave);
+    }
 
     el.infoClose.addEventListener("click", function () { el.infoModal.hidden = true; });
     el.infoModal.addEventListener("click", function (e) {

@@ -37,6 +37,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   closeWindow: function () {
     return ipcRenderer.invoke("close-window");
   },
+  // 主进程在"关闭到托盘"前会发这个通道，通知渲染进程把编辑器里
+  // 防抖中的最后一次改动立刻写盘（preventDefault 之后 beforeunload 不会触发）。
+  onFlushEditorSave: function (cb) {
+    ipcRenderer.on("flush-editor-save", function () {
+      try { cb(); } catch (e) {}
+    });
+  },
   saveFile: function (opts) {
     return ipcRenderer.invoke("save-file", opts);
   },
