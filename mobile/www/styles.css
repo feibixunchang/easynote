@@ -406,9 +406,14 @@ body.dark .sync-pill.ok { color: #4ade80; }
 }
 .trash-bar .text-btn.danger { color: var(--danger); }
 .trash-bar .text-btn:disabled { opacity: 0.45; }
-/* 选中态：与桌面端一致用「淡蓝填充」表示，而不是只描一圈边（描边看起来像没铺满） */
+/* 选中态：与桌面端一致用「淡蓝填充」表示，而不是只描一圈边（描边看起来像没铺满）。
+   必须是「不透明底色 + 半透明染色」两层：卡片底下垫着左滑/右滑的 .swipe-act 动作层，
+   只用纯 rgba 背景会把那两块 92px 的按钮（连文字一起）透出来 ——
+   表现就是列表第一条左右各出现一个"删除/编辑"色块。 */
 .note-card.selected {
-  background: rgba(58, 122, 254, 0.12);
+  background:
+    linear-gradient(rgba(58, 122, 254, 0.12), rgba(58, 122, 254, 0.12)),
+    var(--surface);
   border-color: var(--accent);
 }
 

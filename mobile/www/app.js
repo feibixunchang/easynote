@@ -24,7 +24,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.11";
+  var APP_VERSION = "1.0.12";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -554,7 +554,10 @@
       var row = document.createElement("div");
       row.className = "swipe-row";
       var item = document.createElement("div");
-      item.className = "note-card" + (n.id === state.currentId ? " selected" : "");
+      // 回收站不用「选中高亮」——那里用勾选框表达选中，两种高亮叠在一起会让人以为
+      // 第一条默认被选中（其实只是删除前打开过的那条）
+      item.className = "note-card" +
+        (n.id === state.currentId && state.view !== "trash" ? " selected" : "");
       item.setAttribute("data-id", n.id);
 
       var top = document.createElement("div");
