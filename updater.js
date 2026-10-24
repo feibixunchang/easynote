@@ -20,6 +20,7 @@ const { app } = require("electron");
 
 const REPO_OWNER = "feibixunchang";
 const REPO_NAME = "easynote";
+const RELEASES_PAGE = "https://github.com/" + REPO_OWNER + "/" + REPO_NAME + "/releases";
 
 /* 下载渠道：顺序无关，运行时自动测速选最快；任一失效自动跳过 / 回退。
  * transform(u) 把「官方下载地址」改写成该渠道可访问的地址（镜像多为在前面拼域名）。 */
@@ -32,6 +33,11 @@ const DOWNLOAD_CHANNELS = [
 
 function shellQuote(s) {
   return '"' + String(s).replace(/"/g, '\\"') + '"';
+}
+
+/* AppleScript 字符串字面量转义（用于 do shell script … with administrator privileges） */
+function appleQuote(s) {
+  return '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
 }
 
 /* 跟随重定向的 GET（最多 5 跳）。onResponse(res) 在最终响应上回调。 */
@@ -94,24 +100,106 @@ function pickAsset(assets) {
   return assets.find(function (a) { return /\.deb$/i.test(a.name); }) || null;
 }
 
-/* 取指定版本 Release 的资产列表（含 browser_download_url）。 */
-async function fetchReleaseAssets(version) {
-  const tag = "v" + String(version).replace(/^v/i, "");
+/* ---- 产物命名规则（与 package.json 的 build.artifactName 完全一致）----
+ *   win(nsis) : easynote-Setup-${version}.exe
+ *   mac(dmg)  : easynote-${version}.dmg
+ *   linux     : easynote-${version}-${arch}.AppImage / easynote-${version}-amd64.deb
+ * 有了这条规则，GitHub API 不可达时也能直接拼出下载地址（见 resolveAsset）。 */
+function assetNameCandidates(version) {
+  const v = String(version).replace(/^v/i, "");
+  const platform = process.platform;
+  if (platform === "darwin") return ["easynote-" + v + ".dmg"];
+  if (platform === "win32") return ["easynote-Setup-" + v + ".exe"];
+  return ["easynote-" + v + "-x86_64.AppImage", "easynote-" + v + "-amd64.deb"];
+}
+
+function releaseDownloadUrl(name, version) {
+  const v = String(version).replace(/^v/i, "");
+  return "https://github.com/" + REPO_OWNER + "/" + REPO_NAME + "/releases/download/v" + v + "/" + name;
+}
+
+/* 带超时的 JSON 请求，失败返回 null（不抛异常）。 */
+async function fetchJson(url, ms) {
   const ctrl = new AbortController();
-  const timer = setTimeout(function () { ctrl.abort(); }, 12000);
+  const timer = setTimeout(function () { ctrl.abort(); }, ms || 10000);
   try {
-    const res = await fetch("https://api.github.com/repos/" + REPO_OWNER + "/" + REPO_NAME + "/releases/tags/" + tag, {
+    const res = await fetch(url, {
       headers: { Accept: "application/vnd.github+json", "User-Agent": "easynote-updater" },
       signal: ctrl.signal,
     });
     if (!res.ok) return null;
     const data = await res.json();
-    return data && data.assets ? data.assets : null;
+    return data && Array.isArray(data.assets) ? data.assets : null;
   } catch (e) {
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/* 探测资产是否存在：Range 只取 1 字节，不下载整个安装包。 */
+function probeAsset(url) {
+  return new Promise(function (resolve) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(function () { ctrl.abort(); resolve(false); }, 9000);
+    fetch(url, {
+      headers: { Range: "bytes=0-0", "User-Agent": "easynote-updater" },
+      signal: ctrl.signal,
+      redirect: "follow",
+    }).then(function (res) {
+      clearTimeout(timer);
+      resolve(!!res && (res.status === 200 || res.status === 206));
+    }).catch(function () {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
+
+/* 取指定版本 Release 的资产列表（含 browser_download_url）。
+ * 官方 API 之外再走一遍下载镜像（镜像同时代理 api.github.com）。
+ * 注意：国内网络下 api.github.com 常常连不通（而 github.com 本身是通的），
+ * 所以这里只是兜底，主路径是下面的直链。 */
+async function fetchReleaseAssets(version) {
+  const tag = "v" + String(version).replace(/^v/i, "");
+  const apiUrl = "https://api.github.com/repos/" + REPO_OWNER + "/" + REPO_NAME + "/releases/tags/" + tag;
+  const urls = [apiUrl].concat(DOWNLOAD_CHANNELS.slice(0, 2).map(function (ch) { return ch.transform(apiUrl); }));
+  for (let i = 0; i < urls.length; i++) {
+    const assets = await fetchJson(urls[i], i === 0 ? 9000 : 5000);
+    if (assets) return assets;
+  }
+  return null;
+}
+
+/* 依次探测候选资产名是否真实存在（只读响应头，不下载文件本体）。 */
+async function probeCandidates(names, version) {
+  for (let i = 0; i < names.length; i++) {
+    const url = releaseDownloadUrl(names[i], version);
+    if (await probeAsset(url)) {
+      return { name: names[i], browser_download_url: url };
+    }
+  }
+  return null;
+}
+
+/* 解析出当前系统该用的安装包。
+ * 返回 { asset, viaApi } —— viaApi=false 表示 API 不可用、靠命名规则拼出来的直链。
+ * 直链与 API 并行发起：直链只要 1 字节的响应头，通常 1-2 秒就有结果，
+ * 不必等 API 超时，这也是"提示有更新却下载不了"的根治点。 */
+async function resolveAsset(version) {
+  const v = String(version).replace(/^v/i, "");
+  const names = assetNameCandidates(v);
+  const apiPromise = fetchReleaseAssets(v).catch(function () { return null; });
+  const direct = await probeCandidates(names, v);
+  if (direct) return { asset: direct, viaApi: false };
+  const assets = await apiPromise;
+  if (assets) {
+    const picked = pickAsset(assets);
+    if (picked && picked.browser_download_url) return { asset: picked, viaApi: true };
+    return { asset: null, viaApi: true };
+  }
+  // API 与直链都不通：照样给出第一个候选，后面的多渠道下载还会再试一次
+  return { asset: { name: names[0], browser_download_url: releaseDownloadUrl(names[0], v) }, viaApi: false };
 }
 
 /* 带进度下载：依次尝试 orderedUrls（测速排序后的渠道），失败自动切下一个。 */
@@ -184,9 +272,21 @@ function downloadAsset(orderedUrls, dest, onProgress) {
 /* ============ 各平台安装（均会先关闭旧客户端再安装） ============ */
 
 function installWin(filePath) {
-  // 退出旧客户端，再启动 NSIS 安装向导（oneClick:false 是向导式，旧进程已退出不会锁文件）
-  try { spawn(filePath, [], { detached: true, stdio: "ignore" }).unref(); } catch (e) {}
-  setTimeout(function () { app.exit(0); }, 400);
+  // NSIS 安装向导会检查目标程序是否仍在运行。
+  // 做法：派一个独立的 cmd，等 2 秒（旧客户端此时已退出）再拉起安装向导，
+  // 这样向导不会弹"程序正在运行"。cmd 进程是 detached 的，父进程退出不影响它。
+  const q = '"' + String(filePath).replace(/"/g, '""') + '"';
+  const comspec = process.env.ComSpec || "cmd.exe";
+  let started = false;
+  try {
+    spawn(comspec, ["/c", "ping -n 3 127.0.0.1 >nul && " + q], { detached: true, stdio: "ignore" }).unref();
+    started = true;
+  } catch (e) { started = false; }
+  if (!started) {
+    // 回退：直接启动安装向导（可能出现占用提示，手动关掉旧程序即可）
+    try { spawn(filePath, [], { detached: true, stdio: "ignore" }).unref(); } catch (e) {}
+  }
+  setTimeout(function () { app.exit(0); }, 200);
 }
 
 function installMac(dmgPath) {
@@ -202,29 +302,18 @@ function installMac(dmgPath) {
     if (!mount) { try { execFile("open", [dmgPath]); } catch (e) {} app.exit(0); return; }
     const srcApp = path.join(mount, "简易笔记.app");
     const destApp = "/Applications/简易笔记.app";
-    const cmd = "rm -rf " + shellQuote(destApp) + " && cp -R " + shellQuote(srcApp) + " " + shellQuote(destApp);
-    const runSh = function (c, cb) { execFile("sh", ["-c", c], cb); };
-    runSh(cmd, function (e) {
-      if (e) {
-        // 普通用户没权限写 /Applications，提权再试一次
-        execFile("osascript", ["-e", 'do shell script ' + shellQuote(cmd) + " with administrator privileges"], function (e2) {
-          detachAndRelaunch(mount, e2);
-        });
-      } else {
-        detachAndRelaunch(mount, null);
-      }
-    });
+    // 正在运行的 app 是删不掉的（rm 会报 Text file busy），
+    // 所以替换动作必须发生在旧客户端退出之后 —— 交给一个独立的 shell 进程执行。
+    const plain = "rm -rf " + shellQuote(destApp) + " && cp -R " + shellQuote(srcApp) + " " + shellQuote(destApp);
+    const apple = 'do shell script ' + appleQuote(plain) + " with administrator privileges";
+    const script =
+      "sleep 2; " +
+      "(" + plain + ") 2>/dev/null || osascript -e " + shellQuote(apple) + "; " +
+      "hdiutil detach " + shellQuote(mount) + " -force >/dev/null 2>&1; " +
+      "open " + shellQuote(destApp) + " 2>/dev/null || open " + shellQuote(srcApp);
+    try { spawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" }).unref(); } catch (e) {}
+    setTimeout(function () { app.exit(0); }, 200);
   });
-}
-
-function detachAndRelaunch(mount, err) {
-  execFile("hdiutil", ["detach", mount, "-force"], function () {});
-  if (err) {
-    try { execFile("open", ["/Applications/简易笔记.app"]); } catch (e) {}
-  } else {
-    try { execFile("open", ["/Applications/简易笔记.app"]); } catch (e) {}
-  }
-  setTimeout(function () { app.exit(0); }, 600);
 }
 
 function installLinux(filePath, name) {
@@ -268,11 +357,17 @@ async function downloadAndInstall(opts) {
   if (!version) { onStatus({ phase: "error", message: "未知版本号" }); return; }
 
   onStatus({ phase: "resolve", message: "正在获取安装包信息…" });
-  const assets = await fetchReleaseAssets(version);
-  const asset = pickAsset(assets);
-  if (!asset || !asset.browser_download_url) {
-    onStatus({ phase: "error", message: "找不到匹配当前系统的安装包" });
+  const resolved = await resolveAsset(version);
+  if (!resolved || !resolved.asset || !resolved.asset.browser_download_url) {
+    onStatus({
+      phase: "error",
+      message: "获取安装包信息失败：请检查网络后重试，或到 " + RELEASES_PAGE + " 手动下载",
+    });
     return;
+  }
+  const asset = resolved.asset;
+  if (!resolved.viaApi) {
+    onStatus({ phase: "resolve", message: "GitHub 接口不通，已改用直链下载…" });
   }
   const baseUrl = asset.browser_download_url;
 
@@ -310,7 +405,7 @@ async function downloadAndInstall(opts) {
       });
     });
   } catch (e) {
-    onStatus({ phase: "error", message: "下载失败：" + ((e && e.message) || e) });
+    onStatus({ phase: "error", message: "下载失败：" + ((e && e.message) || e) + "；可到 " + RELEASES_PAGE + " 手动下载" });
     return;
   }
 
@@ -324,4 +419,10 @@ module.exports = {
   DOWNLOAD_CHANNELS: DOWNLOAD_CHANNELS,
   pickAsset: pickAsset,
   downloadAsset: downloadAsset,
+  // 以下为测试用导出
+  resolveAsset: resolveAsset,
+  fetchReleaseAssets: fetchReleaseAssets,
+  assetNameCandidates: assetNameCandidates,
+  releaseDownloadUrl: releaseDownloadUrl,
+  RELEASES_PAGE: RELEASES_PAGE,
 };

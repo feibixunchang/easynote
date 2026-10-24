@@ -2878,7 +2878,10 @@
     var banner = document.getElementById("updateBanner");
     var text = document.getElementById("updateText");
     var dl = document.getElementById("updateDownloadBtn");
+    var pageBtn = document.getElementById("updatePageBtn");
     var dismiss = document.getElementById("updateDismissBtn");
+    // 应用内下载失败时的兜底出口：让用户在浏览器里打开 Releases 页面手动下载
+    var RELEASES_PAGE = "https://github.com/feibixunchang/easynote/releases";
 
     var appVersion = "";
     var releaseUrl = "";
@@ -2894,6 +2897,7 @@
       if (!banner) return;
       if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
       if (text) text.textContent = msg;
+      if (pageBtn) { pageBtn.hidden = true; pageBtn.onclick = null; }
       if (dl) {
         if (actionLabel && actionFn) {
           dl.textContent = actionLabel;
@@ -2927,6 +2931,7 @@
       if (downloading || !api.startUpdate) return;
       downloading = true;
       if (dl) { dl.hidden = true; dl.onclick = null; }
+      if (pageBtn) { pageBtn.hidden = true; pageBtn.onclick = null; }
       if (dismiss) dismiss.hidden = true;
       if (text) text.textContent = "正在测速…";
       if (progress) progress.hidden = false;
@@ -2948,6 +2953,14 @@
       if (progressBar) progressBar.style.width = "0%";
       // 失败横幅可「重试」
       showBanner(msg, "重试", startUpdateFlow, 0);
+      // 再给一个出口：应用内下载不通时，让用户直接去 Releases 页面手动下载
+      // （浏览器有独立的代理/镜像，能下载成功）
+      if (pageBtn) {
+        pageBtn.hidden = false;
+        pageBtn.onclick = function () {
+          if (api.openExternal) api.openExternal(RELEASES_PAGE);
+        };
+      }
     }
 
     // 主进程推送的更新状态：测速 / 下载进度 / 安装 / 失败

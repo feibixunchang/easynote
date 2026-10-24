@@ -183,6 +183,13 @@ body.tb-custom .titlebar-strip { padding-right: 132px; }
   padding: 3px 10px;
   cursor: pointer;
 }
+.update-actions button#updatePageBtn {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 2px 8px;
+  font-size: 12px;
+}
 .update-actions button#updateDismissBtn {
   background: transparent;
   color: var(--accent);

@@ -1,6 +1,6 @@
 {
   "name": "easynote",
-  "version": "1.2.19",
+  "version": "1.2.20",
   "description": "高度还原 Simplenote 的纯中文笔记软件（支持云同步账号与 Windows/macOS/Linux 三端 + iOS/Android 移动端）",
   "main": "main.js",
   "author": "WorkBuddy",
