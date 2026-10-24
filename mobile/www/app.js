@@ -821,6 +821,8 @@
   function swipeDelete(note) {
     if (state.view === "trash") { handleAction("purge", note); return; }
     var id = note.id;
+    // 置顶状态在删除时被清掉，撤销要还原 —— 否则"删掉置顶笔记再撤销"会莫名掉到列表中间
+    var wasPinned = !!note.pinned;
     note.deleted = true;
     note.deletedDate = Date.now();
     note.pinned = false;
@@ -829,15 +831,16 @@
     save();
     renderAll();
     // 撤销时按 id 重新取一遍：3 秒一轮的同步可能已经把对象换成新的了
-    toast("已移到回收站", "撤销", function () { restoreById(id); });
+    toast("已移到回收站", "撤销", function () { restoreById(id, wasPinned); });
   }
 
-  function restoreById(id) {
+  function restoreById(id, wasPinned) {
     var target = null;
     state.notes.forEach(function (n) { if (n.id === id) target = n; });
     if (!target) return;
     target.deleted = false;
     target.deletedDate = null;
+    if (wasPinned) target.pinned = true;
     target.modifiedDate = Date.now();
     save();
     renderAll();

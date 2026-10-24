@@ -959,11 +959,15 @@
         openConfirm("移到回收站",
           "「" + noteCaption(note) + "」将被移到回收站，可在回收站里恢复。",
           function () {
+            // 置顶状态在删除时被清掉，撤销要还原（否则置顶笔记删掉再撤销会掉到列表中间）
+            var wasPinned = !!note.pinned;
             note.deleted = true; note.deletedDate = Date.now(); note.pinned = false; note.modifiedDate = Date.now();
             state.currentId = null; save(); render();
             // 给一次反悔机会：误删是最容易发生的操作
             toast("已移到回收站", "撤销", function () {
-              note.deleted = false; note.deletedDate = null; note.modifiedDate = Date.now();
+              note.deleted = false; note.deletedDate = null;
+              if (wasPinned) note.pinned = true;
+              note.modifiedDate = Date.now();
               state.view = "notes"; state.currentId = note.id; save(); render();
               toast("已恢复该笔记");
             });
