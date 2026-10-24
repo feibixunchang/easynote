@@ -192,6 +192,16 @@ npm start                   # 默认监听 http://localhost:3000
 
 拷完浏览器强制刷新一次（`Ctrl/Cmd + Shift + R`）；已添加到主屏的 PWA 会自动更新。
 
+**更新服务端 `server.js`**（Docker 部署）：换服务端代码比换静态文件危险（语法错会让服务直接起不来），
+所以用另一个脚本，流程是「上传 → 容器内 `node --check` → 通过才重启，失败自动回滚」，
+全程不碰 `data/`：
+
+```bash
+./server/deploy-server.sh 用户@主机 /vol1/simplenote-sync 2580 simplenote-zh-sync
+```
+
+更新完在客户端「云同步 → 同步诊断」里应当能看到服务端版本号。
+
 ### ⚠️ 同步报错排查（413 / 同步失败）
 
 | 现象 | 原因 | 解决 |
