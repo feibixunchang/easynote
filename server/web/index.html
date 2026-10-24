@@ -67,7 +67,7 @@
       </nav>
 
       <div class="sidebar-footer">
-        <div class="nav-item" id="navTrash"><span class="nav-ico">🗑</span><span>回收站</span></div>
+        <div class="nav-item" id="navTrash"><span class="nav-ico">🗑</span><span>回收站</span><span class="nav-badge" id="trashBadge" hidden>0</span></div>
       <div class="nav-item" id="navDark"><span class="nav-ico">🌙</span><span>深色模式</span></div>
       <div class="nav-item" id="navAccount"><span class="nav-ico">☁</span><span id="navAccountLabel">云同步</span></div>
       <div class="nav-item" id="navSettings"><span class="nav-ico">⚙</span><span>设置</span></div>
@@ -88,6 +88,17 @@
             <option value="title">标题</option>
           </select>
         </div>
+      </div>
+      <!-- 回收站批量操作条：只在回收站视图出现，支持全选 / 批量恢复 / 批量永久删除 / 清空 -->
+      <div class="trash-bar" id="trashBar" hidden>
+        <label class="trash-all" title="全选当前列表（Ctrl+A）">
+          <input type="checkbox" id="trashAll" />
+          <span>全选</span>
+        </label>
+        <span class="trash-count" id="trashCount">已选 0 条</span>
+        <button type="button" id="trashRestoreSel" disabled title="恢复选中的笔记">恢复</button>
+        <button type="button" id="trashPurgeSel" class="danger" disabled title="永久删除选中的笔记">永久删除</button>
+        <button type="button" id="trashEmpty" class="danger" title="清空回收站（不可恢复）">清空</button>
       </div>
       <div class="note-list" id="noteList"></div>
     </section>

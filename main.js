@@ -1,5 +1,5 @@
 /* ============ Electron 主进程 ============ */
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme, clipboard, protocol } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme, clipboard, protocol, screen } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { execFile } = require("child_process");
@@ -9,12 +9,30 @@ const APP_VERSION = app.getVersion();
 const REPO_OWNER = "feibixunchang";
 const REPO_NAME = "easynote";
 
+// Windows：必须显式设置 AppUserModelID，否则系统通知（新版本提醒、托盘提示）会被系统直接丢弃，
+// 任务栏也可能把窗口归到 electron.exe 名下（图标/固定行为异常）。macOS/Linux 无此概念。
+if (process.platform === "win32") {
+  try {
+    app.setAppUserModelId("com.workbuddy.simplenotezh");
+  } catch (e) {}
+}
+
 // 主题色：与界面 CSS 变量保持一致（浅色 #f7f7f7 侧栏 / 深色 #252525）
 // 标题栏用编辑器背景色，视觉上与主界面连成一体
 const THEME_COLORS = {
   light: { bg: "#ffffff", fg: "#333333" },
   dark: { bg: "#1e1e1e", fg: "#e2e2e2" },
 };
+
+// 标题栏高度：与 styles.css 里 .titlebar-strip 的 34px 严格一致，
+// 否则 Windows 原生按钮覆盖层会和 HTML 标题栏错位。
+const TITLEBAR_HEIGHT = 34;
+
+// Windows 专用：系统原生「最小化 / 最大化 / 关闭」按钮覆盖层。
+// 历史教训（1.2.15 仍然踩坑）：Windows 上只要 HTML 标题栏整条是 drag 拖拽区，
+// 即使子元素写了 no-drag，点击也经常被系统当作"拖动窗口"吞掉 —— 用户点了 ✕ 毫无反应。
+// 原生覆盖层按钮由操作系统绘制、在 Web 内容之上，点击由窗口过程直接处理，绝不可能被吞。
+const USE_NATIVE_OVERLAY = process.platform === "win32";
 
 /* ============ 系统字体枚举（异步 + 双层缓存，绝不阻塞主进程） ============ */
 // 历史坑：以前用 execSync 跑 `system_profiler SPFontsDataType -json`，
@@ -241,8 +259,12 @@ ipcMain.handle("get-system-fonts", function (_event, force) {
 // macOS：隐藏标题栏保留交通灯，背景色随主题
 function applyTitlebarTheme(win, dark) {
   const c = dark ? THEME_COLORS.dark : THEME_COLORS.light;
-  // 不再使用 titleBarOverlay：Win/Linux 的原生按钮层会被 HTML 拖拽区遮挡导致点不动，
-  // 改为 HTML 标题栏里自定义的「最小化 / 最大化 / 关闭」按钮（macOS 保留原生交通灯）
+  // Windows：原生按钮覆盖层的配色跟着主题走（浅色白底深灰符号 / 深色黑底浅灰符号）
+  if (USE_NATIVE_OVERLAY && win && typeof win.setTitleBarOverlay === "function") {
+    try {
+      win.setTitleBarOverlay({ color: c.bg, symbolColor: c.fg, height: TITLEBAR_HEIGHT });
+    } catch (e) {}
+  }
   win.setBackgroundColor(c.bg);
 }
 
@@ -257,18 +279,37 @@ function loadWindowState() {
   } catch (e) {}
   return null;
 }
+// 保存：最大化时存"还原后的尺寸"（getNormalBounds），否则下次启动会得到一个巨大的普通窗口。
+// 同时记录 maximized 标记，启动时按原样最大化。
 function saveWindowState(win) {
   if (!win || win.isDestroyed()) return;
   try {
-    fs.writeFileSync(winStateFile(), JSON.stringify(win.getBounds()));
+    const maximized = win.isMaximized();
+    const bounds = maximized ? win.getNormalBounds() : win.getBounds();
+    fs.writeFileSync(winStateFile(), JSON.stringify({ ...bounds, maximized }));
   } catch (e) {}
+}
+// 判断保存的位置是否还在某个显示器可见范围内：
+// 拔掉外接显示器 / 改过分辨率后，旧坐标可能落在屏幕外，窗口一启动就"消失"。
+function isBoundsVisible(bounds) {
+  try {
+    return screen.getAllDisplays().some(function (d) {
+      const a = d.workArea;
+      const overlapX = Math.min(bounds.x + bounds.width, a.x + a.width) - Math.max(bounds.x, a.x);
+      const overlapY = Math.min(bounds.y + bounds.height, a.y + a.height) - Math.max(bounds.y, a.y);
+      // 至少露出 120×60 才算"看得见"（够用户抓住标题栏拖回来）
+      return overlapX >= 120 && overlapY >= 60;
+    });
+  } catch (e) {
+    return true; // 拿不到屏幕信息时不要因噎废食
+  }
 }
 
 function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors;
   const c = dark ? THEME_COLORS.dark : THEME_COLORS.light;
   const isMac = process.platform === "darwin";
-  const win = new BrowserWindow({
+  const winOpts = {
     width: 1100,
     height: 780,
     minWidth: 820,
@@ -276,7 +317,7 @@ function createWindow() {
     backgroundColor: c.bg,
     title: "简易笔记",
     // 隐藏系统标题栏，让标题区域与主界面同色：
-    // Win/Linux 用原生窗口按钮覆盖层，macOS 保留左上角交通灯
+    // windows → 原生按钮覆盖层（OS 级按钮，点击最可靠）；macOS → 左上角交通灯；Linux → HTML 按钮
     titleBarStyle: isMac ? "hiddenInset" : "hidden",
     webPreferences: {
       contextIsolation: true,
@@ -286,30 +327,56 @@ function createWindow() {
       backgroundThrottling: false,
       preload: path.join(__dirname, "preload.js"),
     },
-  });
+  };
+  if (USE_NATIVE_OVERLAY) {
+    winOpts.titleBarOverlay = { color: c.bg, symbolColor: c.fg, height: TITLEBAR_HEIGHT };
+  }
+  const win = new BrowserWindow(winOpts);
 
   // 恢复上次保存的窗口尺寸 / 位置（用户自己调好的大小下次启动依然生效）
   const saved = loadWindowState();
   if (saved) {
-    const bounds = { width: Math.max(saved.width, 820), height: Math.max(saved.height, 520) };
-    if (typeof saved.x === "number" && typeof saved.y === "number") {
+    const bounds = {
+      width: Math.max(saved.width, 820),
+      height: Math.max(saved.height, 520),
+    };
+    const hasXY = typeof saved.x === "number" && typeof saved.y === "number";
+    if (hasXY) {
       bounds.x = saved.x;
       bounds.y = saved.y;
     }
-    try { win.setBounds(bounds, false); } catch (e) {}
+    // 位置已经不在任何显示器可见范围内（拔了外接屏 / 改了分辨率）→ 丢弃坐标，让系统居中
+    if (!hasXY || isBoundsVisible(bounds)) {
+      try { win.setBounds(bounds, false); } catch (e) {}
+    } else {
+      try { win.setBounds({ width: bounds.width, height: bounds.height }, false); win.center(); } catch (e) {}
+    }
+    if (saved.maximized) {
+      try { win.maximize(); } catch (e) {}
+    }
   }
 
   win.loadFile(path.join(__dirname, "index.html"));
   applyTitlebarTheme(win, dark);
 
-  // 关闭窗口时隐藏到托盘（托盘菜单里可真正退出）；隐藏前先保存当前尺寸
+  // 关闭窗口：按用户设置决定「隐藏到托盘」还是「直接退出」。
+  // 老版本一律隐藏到托盘，Windows 用户点 ✕ 后窗口消失、程序还在后台，
+  // 很容易被理解成"点了没反应 / 关不掉"，所以这里做成可配置，并在第一次隐藏时给一次提示。
   win.on("close", function (e) {
     saveWindowState(win);
-    if (!app.isQuitting) {
-      e.preventDefault();
-      win.hide();
-      return false;
+    if (app.isQuitting) return; // 托盘「退出」/ 更新安装：真的退出
+    if (!closeToTray) {
+      // 用户选了「关闭即退出」：这里必须真的把进程退掉。
+      // 只置标记不 quit 的话，窗口关了但进程还在（window-all-closed 是有意留空的），
+      // 结果又变成"窗口没了、程序还在后台"——正是这次要修掉的问题。
+      app.isQuitting = true;
+      app.quit();
+      return;
     }
+    e.preventDefault();
+    win.hide();
+    showTrayHintOnce();
+    return false;
   });
 
   // 拖拽 / 缩放窗口后，防抖保存尺寸与位置
@@ -327,26 +394,44 @@ function createWindow() {
 /* ============ 托盘图标 ============ */
 let tray = null;
 let mainWindow = null;
+// 关闭主窗口的行为：true = 隐藏到托盘继续后台同步（默认），false = 直接退出程序。
+// 由渲染进程在启动时按用户设置同步过来（设置项存在 localStorage，单一数据源）。
+// Linux 默认「关闭即退出」：很多发行版（GNOME/Wayland）托盘区默认不显示图标，
+// 隐藏到托盘 = 程序还在跑但用户再也找不到窗口。Windows/macOS 托盘稳定，默认隐藏到托盘。
+let closeToTray = process.platform !== "linux";
+let trayHintShown = false;
+
+// 第一次隐藏到托盘时给一次系统通知，避免用户以为"关不掉 / 程序卡死"
+function showTrayHintOnce() {
+  if (trayHintShown) return;
+  trayHintShown = true;
+  notify(
+    "简易笔记仍在后台运行",
+    "窗口已最小化到系统托盘，点托盘图标可重新打开；右键托盘图标可退出。可在「设置 → 关闭主窗口时」改为直接退出。"
+  );
+}
 
 function getTrayIcon() {
-  // 纯白笔记本样式托盘图标：macOS 用「模板图」机制，菜单栏里自动显示为单色
-  // （深色菜单栏→白色，浅色→深色），与其它系统托盘图标一致、美观。
-  // 图标本身是白色形状 + 透明底；模板图只取 alpha 通道，颜色被忽略。
-  const trayPath = path.join(__dirname, "build/icons/tray-mac.png");
-  try {
-    const buf = fs.readFileSync(trayPath); // fs 透明支持 asar
-    let img = nativeImage.createFromBuffer(buf);
-    if (img && !img.isEmpty()) {
-      img.setTemplateImage(true); // 关键：模板图 → 菜单栏里显示为标准单色图标
-      const s = img.getSize();
-      // 菜单栏图标应约为 18pt 高；过大就缩放，避免在菜单栏里拉成一条长横条
-      if (s.height > 20) img = img.resize({ height: 18, quality: "best" });
-      return img;
+  // 图标选型分两套，不能混用：
+  //   macOS → 白色笔记本造型 + 模板图机制（菜单栏自动单色，深浅菜单栏都好看）
+  //   Windows/Linux → 彩色应用图标（Windows 通知区域默认深色，白色模板图会"隐身"，
+  //                   用户找不到托盘图标就等于无法恢复窗口）
+  if (process.platform === "darwin") {
+    const trayPath = path.join(__dirname, "build/icons/tray-mac.png");
+    try {
+      const buf = fs.readFileSync(trayPath);
+      let img = nativeImage.createFromBuffer(buf);
+      if (img && !img.isEmpty()) {
+        img.setTemplateImage(true);
+        const s = img.getSize();
+        if (s.height > 20) img = img.resize({ height: 18, quality: "best" });
+        return img;
+      }
+    } catch (e) {
+      /* 走通用图标 */
     }
-  } catch (e) {
-    /* 回退到通用图标 */
   }
-  // 回退：复用原 app 图标（同样作为模板图），避免菜单栏出现空白长条
+  // 彩色图标（Windows/Linux 与 macOS 的兜底）
   const candidates = [
     path.join(__dirname, "build/icons/256x256.png"),
     path.join(__dirname, "build/icons/128x128.png"),
@@ -357,9 +442,11 @@ function getTrayIcon() {
       const buf = fs.readFileSync(p); // fs 透明支持 asar
       let img = nativeImage.createFromBuffer(buf);
       if (img && !img.isEmpty()) {
-        img.setTemplateImage(true);
+        if (process.platform === "darwin") img.setTemplateImage(true);
         const s = img.getSize();
-        if (s.height > 20) img = img.resize({ height: 18, quality: "best" });
+        // Windows 通知区域的图标按 16px 左右显示，给个 24px 保证清晰不糊
+        const target = process.platform === "darwin" ? 18 : 24;
+        if (s.height > target) img = img.resize({ height: target, quality: "best" });
         return img;
       }
     } catch (e) {
@@ -389,9 +476,19 @@ function buildTrayMenu() {
     { type: "separator" },
     hasUpdate
       ? {
-          label: "⬆ 下载新版本 v" + latestRelease.version,
+          label: "⬆ 下载并安装 v" + latestRelease.version,
           click: function () {
-            shell.openExternal(latestRelease.url);
+            // 与界面里的「下载」按钮同一条应用内更新链路：测速 → 下载（带进度）→ 自动关旧客户端安装。
+            // 老版本这里直接 shell.openExternal 跳 GitHub 网页，与 1.2.13 起的应用内更新自相矛盾。
+            showWindow();
+            updater.downloadAndInstall({
+              version: latestRelease.version,
+              onStatus: function (s) {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                  mainWindow.webContents.send("update-status", s);
+                }
+              },
+            });
           },
         }
       : { label: "检查更新…", click: function () { checkUpdate(true); } },
@@ -674,15 +771,35 @@ ipcMain.handle("write-clipboard", function (_e, text) {
 });
 
 // 窗口控制：供 HTML 标题栏里的自定义按钮调用（Win/Linux 显示，macOS 用原生交通灯）
+// 返回一个对象而不是裸字符串，方便渲染进程一次拿到"谁是系统按钮、谁是 HTML 按钮"：
+//   overlay=true  → 系统已经画好了最小化/最大化/关闭（Windows），HTML 那三个按钮必须隐藏
+//   overlay=false → 由界面自己画按钮（Linux）
 ipcMain.handle("get-platform", function () {
-  return process.platform;
+  return {
+    platform: process.platform,
+    overlay: USE_NATIVE_OVERLAY,
+    titlebarHeight: TITLEBAR_HEIGHT,
+    closeDefault: process.platform === "linux" ? "quit" : "tray",
+  };
 });
 ipcMain.handle("minimize-window", function () {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
 });
 ipcMain.handle("close-window", function () {
-  // 走标准 close 流程：会触发 win.on("close")，隐藏到托盘（与点 X 行为一致）
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!closeToTray) {
+    // 用户选择"关闭即退出"：走真正的退出流程
+    app.isQuitting = true;
+    app.quit();
+    return;
+  }
+  // 走标准 close 流程：触发 win.on("close")，隐藏到托盘（与点 ✕ 行为一致）
+  mainWindow.close();
+});
+// 用户在设置里切换「关闭主窗口时」的行为
+ipcMain.handle("set-close-behavior", function (_e, toTray) {
+  closeToTray = toTray !== false;
+  return closeToTray;
 });
 
 // 无法被 nativeImage 解码时，按扩展名猜测 MIME

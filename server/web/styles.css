@@ -177,6 +177,22 @@ body {
 .nav-item:hover { background: var(--hover); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .nav-ico { width: 16px; text-align: center; opacity: 0.85; }
+/* 回收站条数徽标：0 条时隐藏，避免侧栏多一个没意义的 0 */
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--border-strong);
+  color: var(--text-light);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.nav-badge[hidden] { display: none; }
+.nav-item.active .nav-badge { background: var(--accent); color: #fff; }
 
 .tags-section { margin-top: 14px; }
 .tags-header {
@@ -250,12 +266,55 @@ body {
 
 .note-list { flex: 1; overflow-y: auto; }
 .note-item {
+  position: relative;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
 .note-item:hover { background: var(--hover); }
 .note-item.selected { background: var(--sel); }
+/* 回收站视图：每条前面一个复选框，标题区左移让位 */
+.note-item.has-check { padding-left: 42px; }
+.note-item.checked { background: var(--accent-soft); }
+.note-check {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+/* 回收站批量操作条 */
+.trash-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  font-size: 12.5px;
+  color: var(--text-light);
+}
+.trash-bar[hidden] { display: none; }
+.trash-all { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+.trash-all input { width: 14px; height: 14px; margin: 0; cursor: pointer; accent-color: var(--accent); }
+.trash-count { margin-right: auto; }
+.trash-bar button {
+  padding: 4px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.trash-bar button:hover:not(:disabled) { background: var(--hover); }
+.trash-bar button.danger { color: #d94848; border-color: #e3b4b4; }
+.trash-bar button.danger:hover:not(:disabled) { background: #fdeaea; }
+.trash-bar button:disabled { opacity: 0.45; cursor: default; }
 /* 颜色标签：标题前的小圆点 */
 .note-color-dot {
   flex: 0 0 auto;
@@ -532,6 +591,9 @@ button.primary:hover { filter: brightness(1.05); }
   bottom: 28px;
   left: 50%;
   transform: translateX(-50%) translateY(20px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
   background: #333;
   color: #fff;
   padding: 10px 18px;
@@ -542,6 +604,20 @@ button.primary:hover { filter: brightness(1.05); }
   transition: opacity 0.25s, transform 0.25s;
   z-index: 60;
 }
+/* 带「撤销」按钮时需要能点，所以单独放开指针事件 */
+.toast.has-action { pointer-events: auto; }
+.toast-action {
+  border: none;
+  background: transparent;
+  color: #7fb4ff;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+.toast-action:hover { text-decoration: underline; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* ---------------- 右键菜单 ---------------- */

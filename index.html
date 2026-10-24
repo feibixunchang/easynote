@@ -7,9 +7,12 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <!-- 顶部标题栏：整条是窗口拖拽区；右侧为自定义窗口按钮（仅 Win/Linux 显示，
-       macOS 保留左上角原生交通灯，由 app.js 按平台控制显隐） -->
+  <!-- 顶部标题栏：视觉上是一整条，但「拖拽区」是里面独立的 .titlebar-drag 元素，
+       它主动让开右侧按钮区域 —— 这样标题栏能拖动，右侧按钮也不会被拖拽区吞掉点击。
+       Windows 用系统原生按钮覆盖层（titleBarOverlay，最可靠）；Linux 用下面的 HTML 按钮；
+       macOS 用左上角原生交通灯，HTML 按钮全部隐藏。 -->
   <div class="titlebar-strip" id="titlebarStrip">
+    <div class="titlebar-drag" id="titlebarDrag" aria-hidden="true"></div>
     <span class="titlebar-title">简易笔记</span>
     <div class="win-controls" id="winControls" hidden>
       <button type="button" id="winMinBtn" title="最小化" aria-label="最小化">─</button>
@@ -22,7 +25,7 @@
     <!-- 左侧栏：标签 / 搜索 / 回收站 -->
     <aside class="sidebar">
       <div class="sidebar-header">
-        <span class="logo">简易笔记</span><span class="version-badge" id="appVersion" title="当前版本">v1.2.15</span>
+        <span class="logo">简易笔记</span><span class="version-badge" id="appVersion" title="当前版本">v1.2.16</span>
       </div>
 
       <div class="update-banner" id="updateBanner" hidden>
@@ -61,7 +64,7 @@
       </nav>
 
       <div class="sidebar-footer">
-        <div class="nav-item" id="navTrash"><span class="nav-ico">🗑</span><span>回收站</span></div>
+        <div class="nav-item" id="navTrash"><span class="nav-ico">🗑</span><span>回收站</span><span class="nav-badge" id="trashBadge" hidden>0</span></div>
       <div class="nav-item" id="navDark"><span class="nav-ico">🌙</span><span>深色模式</span></div>
       <div class="nav-item" id="navAccount"><span class="nav-ico">☁</span><span id="navAccountLabel">云同步</span></div>
       <div class="nav-item" id="navSettings"><span class="nav-ico">⚙</span><span>设置</span></div>
@@ -83,9 +86,19 @@
           </select>
         </div>
       </div>
+      <!-- 回收站批量操作条：只在回收站视图出现，支持全选 / 批量恢复 / 批量永久删除 / 清空 -->
+      <div class="trash-bar" id="trashBar" hidden>
+        <label class="trash-all" title="全选当前列表（Ctrl+A）">
+          <input type="checkbox" id="trashAll" />
+          <span>全选</span>
+        </label>
+        <span class="trash-count" id="trashCount">已选 0 条</span>
+        <button type="button" id="trashRestoreSel" disabled title="恢复选中的笔记">恢复</button>
+        <button type="button" id="trashPurgeSel" class="danger" disabled title="永久删除选中的笔记">永久删除</button>
+        <button type="button" id="trashEmpty" class="danger" title="清空回收站（不可恢复）">清空</button>
+      </div>
       <div class="note-list" id="noteList"></div>
     </section>
-
     <!-- 右栏：编辑器 -->
     <section class="editor-pane">
       <div class="editor-toolbar hidden" id="editorToolbar"></div>
@@ -145,6 +158,14 @@
           <option value="20">特大</option>
         </select>
       </div>
+      <div class="setting-row">
+        <label>关闭主窗口时</label>
+        <select id="closeBehaviorSelect">
+          <option value="tray">最小化到系统托盘（后台继续同步）</option>
+          <option value="quit">直接退出程序</option>
+        </select>
+      </div>
+      <p class="modal-sub" style="margin-top:-4px" id="closeBehaviorHint">最小化到托盘：点右上角 ✕ 后程序仍在后台运行、同步不中断，点托盘图标即可恢复；右键托盘图标可退出。选择「直接退出」则 ✕ 立即结束程序（不同步完可能丢最后几秒的改动）。</p>
       <div class="setting-row">
         <label>插入图片方式</label>
         <select id="imageModeSelect">

@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getPlatform: function () {
     return ipcRenderer.invoke("get-platform");
   },
+  setCloseBehavior: function (toTray) {
+    return ipcRenderer.invoke("set-close-behavior", toTray);
+  },
   minimizeWindow: function () {
     return ipcRenderer.invoke("minimize-window");
   },

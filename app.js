@@ -16,6 +16,7 @@
   var TOTAL_KEY = "simplenote_zh_total";   // 上次已知的服务端笔记总数（检测数据丢失）
   var DAV_KEY = "simplenote_zh_webdav";
   var IMGMODE_KEY = "simplenote_zh_imgmode"; // embed | path（插入图片的方式）
+  var CLOSE_KEY = "simplenote_zh_close";     // tray | quit（点 ✕ 时的行为）
   // 纯浏览器环境（无 Electron）下的回退字体清单（均为 Windows 常见中文字体）
   var FALLBACK_FONTS = [
     "微软雅黑", "Microsoft YaHei", "等线", "Dengxian", "黑体", "SimHei",
@@ -91,6 +92,8 @@
     legacyServer: false, // 服务端不支持增量（不返回 serverTime）
     dav: { server: "", username: "", password: "", dir: "/easynote" },
     imageMode: "embed", // 'embed' 内嵌进笔记 | 'path' 引用原文件路径
+    closeBehavior: "tray", // 'tray' 点 ✕ 最小化到托盘 | 'quit' 直接退出
+    selected: {}, // 回收站里勾选的笔记 id（批量恢复 / 批量删除）
   };
 
   /* ---------------- 存储 ---------------- */
@@ -116,6 +119,8 @@
     // 图片插入方式：默认内嵌（换设备也看得到）；"path" 为引用原文件路径（笔记体积小）
     var imgMode = store.getItem(IMGMODE_KEY);
     state.imageMode = imgMode === "path" ? "path" : "embed";
+    // 点 ✕ 时的行为：默认最小化到托盘（后台同步不中断）
+    state.closeBehavior = store.getItem(CLOSE_KEY) === "quit" ? "quit" : "tray";
     // 默认同步地址：
     // - Electron 桌面端：固定 localhost:3000（用户可在设置里改成自己的服务器）
     // - 纯浏览器（Docker 网页版）：用当前页面所在域名即 API 同源地址，免填、免 CORS
@@ -149,7 +154,6 @@
     } catch (e) {}
     applyTheme();
   }
-  var syncInFlight = false; // 是否有同步请求正在进行（防止并发）
   function save() {
     store.setItem(STORE_KEY, JSON.stringify(state.notes));
     if (state.token) scheduleSync();
@@ -353,6 +357,14 @@
     el.tagList = document.getElementById("tagList");
     el.navNotes = document.getElementById("navNotes");
     el.navTrash = document.getElementById("navTrash");
+    el.trashBadge = document.getElementById("trashBadge");
+    el.trashBar = document.getElementById("trashBar");
+    el.trashAll = document.getElementById("trashAll");
+    el.trashCount = document.getElementById("trashCount");
+    el.trashRestoreSel = document.getElementById("trashRestoreSel");
+    el.trashPurgeSel = document.getElementById("trashPurgeSel");
+    el.trashEmpty = document.getElementById("trashEmpty");
+    el.closeBehaviorSelect = document.getElementById("closeBehaviorSelect");
     el.navDark = document.getElementById("navDark");
     el.navExport = document.getElementById("navExport");
     el.navImport = document.getElementById("navImport");
@@ -473,17 +485,34 @@
 
   function renderList() {
     var list = getNotes();
+    var inTrash = state.view === "trash";
     el.noteList.innerHTML = "";
     if (list.length === 0) {
       var hint = document.createElement("div");
       hint.className = "empty-hint";
-      hint.textContent = state.view === "trash" ? "回收站为空" : "没有匹配的笔记";
+      hint.textContent = inTrash ? "回收站为空" : "没有匹配的笔记";
       el.noteList.appendChild(hint);
+      updateTrashBar();
       return;
     }
     list.forEach(function (n) {
       var item = document.createElement("div");
       item.className = "note-item" + (n.id === state.currentId ? " selected" : "");
+      // 回收站：每条前面一个复选框，配合顶部「全选」做批量恢复 / 删除
+      if (inTrash) {
+        item.classList.add("has-check");
+        if (state.selected[n.id]) item.classList.add("checked");
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "note-check";
+        cb.checked = !!state.selected[n.id];
+        cb.title = "勾选后可批量恢复 / 永久删除";
+        cb.addEventListener("click", function (e) {
+          e.stopPropagation(); // 勾选不要顺带选中/打开这条笔记
+          setSelected(n.id, cb.checked, item);
+        });
+        item.appendChild(cb);
+      }
       var title = document.createElement("div");
       title.className = "note-title";
       title.innerHTML = (n.color ? '<span class="note-color-dot" style="background:' + colorOf(n.color).color + '" title="' + colorOf(n.color).name + '"></span>' : "") + escapeHtml(getTitle(n)) + (n.pinned ? ' <span class="pin">📌</span>' : "");
@@ -492,7 +521,13 @@
       snip.textContent = getSnippet(n) || "没有更多文字";
       var meta = document.createElement("div");
       meta.className = "note-meta";
-      meta.textContent = formatDate(n.modifiedDate) + (n.markdown ? " · Markdown" : "");
+      if (inTrash && n.deletedDate) {
+        // 回收站里更有用的信息是「已经躺了几天」，而不是最后修改时间
+        var days = Math.max(0, Math.floor((Date.now() - n.deletedDate) / 86400000));
+        meta.textContent = (days === 0 ? "今天删除" : days + " 天前删除") + " · 原修改于 " + formatDate(n.modifiedDate);
+      } else {
+        meta.textContent = formatDate(n.modifiedDate) + (n.markdown ? " · Markdown" : "");
+      }
       item.appendChild(title);
       item.appendChild(snip);
       item.appendChild(meta);
@@ -503,6 +538,107 @@
       });
       el.noteList.appendChild(item);
     });
+    updateTrashBar();
+  }
+
+  /* ---------------- 回收站：勾选 / 全选 / 批量操作 ---------------- */
+  function setSelected(id, on, itemEl) {
+    if (on) state.selected[id] = true;
+    else delete state.selected[id];
+    if (itemEl) itemEl.classList.toggle("checked", !!on);
+    updateTrashBar();
+  }
+
+  function updateTrashBar() {
+    var trashTotal = state.notes.filter(function (n) { return !!n.deleted; }).length;
+    if (el.trashBadge) {
+      el.trashBadge.hidden = trashTotal === 0;
+      el.trashBadge.textContent = trashTotal > 99 ? "99+" : String(trashTotal);
+    }
+    if (!el.trashBar) return;
+    var inTrash = state.view === "trash";
+    el.trashBar.hidden = !inTrash;
+    if (!inTrash) return;
+    var list = getNotes();
+    // 搜索 / 切换视图后，把已经不在当前列表里的勾选清掉，避免"看不见却被删掉"
+    var alive = {};
+    list.forEach(function (n) { alive[n.id] = true; });
+    Object.keys(state.selected).forEach(function (id) {
+      if (!alive[id]) delete state.selected[id];
+    });
+    var selCount = list.filter(function (n) { return state.selected[n.id]; }).length;
+    if (el.trashCount) el.trashCount.textContent = "已选 " + selCount + " / " + list.length + " 条";
+    if (el.trashRestoreSel) el.trashRestoreSel.disabled = selCount === 0;
+    if (el.trashPurgeSel) el.trashPurgeSel.disabled = selCount === 0;
+    if (el.trashEmpty) el.trashEmpty.disabled = list.length === 0;
+    if (el.trashAll) {
+      el.trashAll.checked = list.length > 0 && selCount === list.length;
+      el.trashAll.indeterminate = selCount > 0 && selCount < list.length;
+      el.trashAll.disabled = list.length === 0;
+    }
+  }
+
+  // 当前视图下所有被勾选的回收站笔记
+  function selectedTrashNotes() {
+    return getNotes().filter(function (n) { return state.selected[n.id]; });
+  }
+
+  // 统一入口：墓碑记账 + 本地删除 + 通知服务端删除 + 保存渲染
+  function purgeNotes(ids) {
+    if (!ids || !ids.length) return;
+    ids.forEach(function (id) {
+      if (state.purged.indexOf(id) === -1) state.purged.push(id);
+      delete state.selected[id];
+    });
+    store.setItem(PURGE_KEY, JSON.stringify(state.purged));
+    state.notes = state.notes.filter(function (n) { return ids.indexOf(n.id) === -1; });
+    if (ids.indexOf(state.currentId) !== -1) state.currentId = null;
+    purgeOnServer(ids);
+    save();
+    render();
+  }
+
+  function restoreSelected() {
+    var sel = selectedTrashNotes();
+    if (!sel.length) return;
+    var now = Date.now();
+    sel.forEach(function (n) {
+      n.deleted = false;
+      n.deletedDate = null;
+      n.modifiedDate = now;
+    });
+    state.selected = {};
+    save();
+    render();
+    toast("已恢复 " + sel.length + " 条笔记");
+  }
+
+  function purgeSelected() {
+    var sel = selectedTrashNotes();
+    if (!sel.length) return;
+    var ids = sel.map(function (n) { return n.id; });
+    openConfirm(
+      "永久删除 " + ids.length + " 条笔记",
+      "这 " + ids.length + " 条笔记将被永久删除、无法恢复，并从所有设备上一起删除。",
+      function () {
+        purgeNotes(ids);
+        toast("已永久删除 " + ids.length + " 条");
+      }
+    );
+  }
+
+  function emptyTrash() {
+    var list = getNotes();
+    if (!list.length) return;
+    var ids = list.map(function (n) { return n.id; });
+    openConfirm(
+      "清空回收站",
+      "回收站里的 " + ids.length + " 条笔记将被永久删除、无法恢复（所有设备同步生效）。",
+      function () {
+        purgeNotes(ids);
+        toast("回收站已清空（" + ids.length + " 条）");
+      }
+    );
   }
 
   function setToolbar(note) {
@@ -574,6 +710,8 @@
   function render() {
     el.navNotes.classList.toggle("active", state.view === "notes" && !state.activeTag);
     el.navTrash.classList.toggle("active", state.view === "trash");
+    // 离开回收站时清空勾选，避免下次进回收站时"莫名其妙已选了几条"
+    if (state.view !== "trash") state.selected = {};
     el.navDark.innerHTML = '<span class="nav-ico">' + (state.dark ? "☀" : "🌙") + "</span><span>" + (state.dark ? "浅色模式" : "深色模式") + "</span>";
     document.body.classList.toggle("dark", state.dark);
     renderTags();
@@ -634,7 +772,24 @@
     box.appendChild(actions);
     m.appendChild(box);
     document.body.appendChild(m);
-    function close() { if (m.parentNode) m.parentNode.removeChild(m); }
+    function close() {
+      document.removeEventListener("keydown", onKey, true);
+      if (m.parentNode) m.parentNode.removeChild(m);
+    }
+    // 键盘友好：Esc 取消、Enter 确认（很多人习惯不打鼠标就确认）
+    function onKey(e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        if (onYes) onYes();
+      }
+    }
+    document.addEventListener("keydown", onKey, true);
     cancel.addEventListener("click", close);
     m.addEventListener("click", function (e) { if (e.target === m) close(); });
     yes.addEventListener("click", function () { close(); if (onYes) onYes(); });
@@ -672,7 +827,12 @@
           function () {
             note.deleted = true; note.deletedDate = Date.now(); note.pinned = false; note.modifiedDate = Date.now();
             state.currentId = null; save(); render();
-            toast("已移到回收站");
+            // 给一次反悔机会：误删是最容易发生的操作
+            toast("已移到回收站", "撤销", function () {
+              note.deleted = false; note.deletedDate = null; note.modifiedDate = Date.now();
+              state.view = "notes"; state.currentId = note.id; save(); render();
+              toast("已恢复该笔记");
+            });
           });
         break;
       case "restore":
@@ -682,15 +842,7 @@
         openConfirm("永久删除",
           "「" + noteCaption(note) + "」将被永久删除，不可恢复，并同步删除所有设备上的这一条。",
           function () {
-            // 记入墓碑再删除：服务端若是合并同步，墓碑可防止笔记被还原
-            if (state.purged.indexOf(note.id) === -1) {
-              state.purged.push(note.id);
-              store.setItem(PURGE_KEY, JSON.stringify(state.purged));
-            }
-            state.notes = state.notes.filter(function (n) { return n.id !== note.id; });
-            if (state.currentId === note.id) state.currentId = null;
-            purgeOnServer([note.id]);
-            save(); render();
+            purgeNotes([note.id]);
             toast("已永久删除");
           });
         break;
@@ -808,7 +960,9 @@
   }
 
   var toastTimer;
-  function toast(msg) {
+  // 轻提示。可选带一个动作按钮（如「撤销」）——删除类操作给一次反悔机会，
+  // 比"删了就删了"友好得多（Simplenote 也是这个交互）。
+  function toast(msg, actionLabel, actionFn) {
     var t = document.getElementById("toast");
     if (!t) {
       t = document.createElement("div");
@@ -816,10 +970,29 @@
       t.className = "toast";
       document.body.appendChild(t);
     }
-    t.textContent = msg;
+    t.innerHTML = "";
+    var span = document.createElement("span");
+    span.textContent = msg;
+    t.appendChild(span);
+    if (actionLabel) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "toast-action";
+      btn.textContent = actionLabel;
+      btn.addEventListener("click", function (e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        t.classList.remove("show");
+        clearTimeout(toastTimer);
+        if (actionFn) actionFn();
+      });
+      t.appendChild(btn);
+    }
+    t.classList.toggle("has-action", !!actionLabel);
     t.classList.add("show");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 1800);
+    toastTimer = setTimeout(function () {
+      t.classList.remove("show");
+    }, actionLabel ? 6000 : 1800);
   }
 
   function exportAll() {
@@ -833,19 +1006,47 @@
     toast("已导出备份");
   }
 
+  // 导入备份：按 id 合并而不是无脑 concat。
+  // 老实现每导一次同样的备份就多一份重复笔记（多端同步后更乱），这里改成：
+  //   新 id → 新增；同 id 且备份里的修改时间更新 → 覆盖；否则跳过。
   function importAll(file) {
     var reader = new FileReader();
     reader.onload = function () {
       try {
         var arr = JSON.parse(reader.result);
-        if (Array.isArray(arr)) {
-          state.notes = arr.concat(state.notes);
-          save();
-          render();
-          toast("导入成功，共 " + arr.length + " 条笔记");
-        } else {
-          toast("导入失败：格式不正确");
+        if (!Array.isArray(arr)) {
+          toast("导入失败：格式不正确（应为导出的 JSON 数组）");
+          return;
         }
+        var byId = {};
+        state.notes.forEach(function (n) { byId[n.id] = n; });
+        var added = 0, updated = 0, skipped = 0;
+        arr.forEach(function (n) {
+          if (!n || !n.id || typeof n.content !== "string") { skipped++; return; }
+          var cur = byId[n.id];
+          if (!cur) {
+            if (state.purged.indexOf(n.id) !== -1) { skipped++; return; } // 已永久删除的不复活
+            state.notes.push(n);
+            byId[n.id] = n;
+            added++;
+            return;
+          }
+          if ((n.modifiedDate || 0) > (cur.modifiedDate || 0)) {
+            cur.content = n.content;
+            cur.modifiedDate = n.modifiedDate;
+            if (typeof n.deleted === "boolean") cur.deleted = n.deleted;
+            if (n.deletedDate) cur.deletedDate = n.deletedDate;
+            cur.pinned = !!n.pinned;
+            cur.markdown = !!n.markdown;
+            if (typeof n.color === "string") cur.color = n.color;
+            updated++;
+          } else {
+            skipped++;
+          }
+        });
+        save();
+        render();
+        toast("导入完成：新增 " + added + " 条" + (updated ? "，更新 " + updated + " 条" : "") + (skipped ? "，跳过 " + skipped + " 条重复" : ""));
       } catch (e) {
         toast("导入失败：文件损坏");
       }
@@ -862,6 +1063,21 @@
     });
     el.navTrash.addEventListener("click", function () {
       state.view = "trash"; render();
+    });
+    // 回收站批量操作
+    if (el.trashAll) el.trashAll.addEventListener("change", function () {
+      var list = getNotes();
+      state.selected = {};
+      if (el.trashAll.checked) {
+        list.forEach(function (n) { state.selected[n.id] = true; });
+      }
+      renderList();
+    });
+    if (el.trashRestoreSel) el.trashRestoreSel.addEventListener("click", restoreSelected);
+    if (el.trashPurgeSel) el.trashPurgeSel.addEventListener("click", purgeSelected);
+    if (el.trashEmpty) el.trashEmpty.addEventListener("click", emptyTrash);
+    if (el.closeBehaviorSelect) el.closeBehaviorSelect.addEventListener("change", function () {
+      setCloseBehavior(el.closeBehaviorSelect.value);
     });
     el.navDark.addEventListener("click", function () {
       // 点击切换到与当前生效状态相反的模式（显式指定，不再跟随系统）
@@ -890,7 +1106,9 @@
 
     el.search.addEventListener("input", function () {
       state.query = el.search.value;
-      renderList();
+      // 用 render() 而不是 renderList()：搜索把当前笔记过滤掉时，
+      // 编辑器要跟着切到列表里的第一条，否则会出现"列表里没有、右边却显示着"的错位。
+      render();
     });
     el.sortSelect.addEventListener("change", function () {
       state.sort = el.sortSelect.value;
@@ -951,6 +1169,68 @@
 
     // 点击空白处关闭右键菜单
     document.addEventListener("click", hideCtxMenu);
+
+    // 全局快捷键（本来一个都没有，纯靠鼠标，效率低）：
+    //   Ctrl/Cmd+F       聚焦搜索
+    //   Ctrl/Cmd+,       打开设置
+    //   Ctrl/Cmd+A       回收站里全选（编辑框内不拦截，保留"全选文字"）
+    //   Alt+↑ / Alt+↓    上一条 / 下一条笔记
+    //   Esc              关闭弹窗 / 清空搜索
+    document.addEventListener("keydown", function (e) {
+      var mod = e.ctrlKey || e.metaKey;
+      var tag = e.target && e.target.tagName;
+      var inField = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (mod && !e.shiftKey && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        el.search.focus();
+        el.search.select();
+        return;
+      }
+      if (mod && e.key === ",") {
+        e.preventDefault();
+        openSettings();
+        return;
+      }
+      if (mod && !e.shiftKey && (e.key === "a" || e.key === "A") && state.view === "trash" && !inField) {
+        e.preventDefault();
+        var all = getNotes();
+        var allOn = all.length > 0 && all.every(function (n) { return state.selected[n.id]; });
+        state.selected = {};
+        if (!allOn) all.forEach(function (n) { state.selected[n.id] = true; });
+        renderList();
+        return;
+      }
+      if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        var list = getNotes();
+        if (!list.length) return;
+        e.preventDefault();
+        var idx = -1;
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].id === state.currentId) { idx = i; break; }
+        }
+        var next = e.key === "ArrowDown" ? Math.min(list.length - 1, idx + 1) : Math.max(0, idx - 1);
+        if (idx === -1) next = 0;
+        selectNote(list[next].id);
+        return;
+      }
+      if (e.key === "Escape") {
+        // 优先关掉打开着的弹窗，其次清空搜索
+        var open = document.querySelector(".modal:not([hidden])");
+        if (open) {
+          open.hidden = true;
+          return;
+        }
+        if (ctxEl && !ctxEl.hidden) {
+          hideCtxMenu();
+          return;
+        }
+        if (el.search.value) {
+          el.search.value = "";
+          state.query = "";
+          renderList();
+        }
+      }
+    });
 
     // 预览区：点击链接 / 图片 → 用默认浏览器或外部程序打开
     el.previewPane.addEventListener("click", function (e) {
@@ -1052,6 +1332,25 @@
   function applySettings() {
     document.documentElement.style.setProperty("--font", buildFontStack(state.fontFamily));
     document.documentElement.style.setProperty("--editor-fs", (state.fontSize || 16) + "px");
+    if (el.closeBehaviorSelect) el.closeBehaviorSelect.value = state.closeBehavior;
+    syncCloseBehavior();
+  }
+
+  // 把「关闭窗口」的行为告诉主进程。主进程自己拿不到 localStorage，
+  // 所以渲染端启动时和设置变化时都要同步一次（主进程默认按"最小化到托盘"处理）。
+  function syncCloseBehavior() {
+    var api = window.electronAPI;
+    if (!api || !api.setCloseBehavior) return;
+    // 用户没设置过就什么都不发，沿用主进程的平台默认值
+    // （Linux 默认"关闭即退出"，因为很多发行版的托盘区根本不显示图标）
+    if (!store.getItem(CLOSE_KEY)) return;
+    api.setCloseBehavior(state.closeBehavior !== "quit").catch(function () {});
+  }
+  function setCloseBehavior(mode) {
+    state.closeBehavior = mode === "quit" ? "quit" : "tray";
+    store.setItem(CLOSE_KEY, state.closeBehavior);
+    syncCloseBehavior();
+    toast(state.closeBehavior === "quit" ? "以后点 ✕ 将直接退出程序" : "以后点 ✕ 将最小化到托盘");
   }
 
   function fillFontSelect(fonts, hint) {
@@ -1108,6 +1407,7 @@
   function openSettings() {
     if (el.themeModeSelect) el.themeModeSelect.value = state.themeMode;
     if (el.imageModeSelect) el.imageModeSelect.value = state.imageMode;
+    if (el.closeBehaviorSelect) el.closeBehaviorSelect.value = state.closeBehavior;
     updateImgFixStatus();
     if (el.davUrl) el.davUrl.value = state.dav.server || "";
     if (el.davUser) el.davUser.value = state.dav.username || "";
@@ -1586,6 +1886,18 @@
   }
 
   function openNoteMenu(x, y, note) {
+    // 回收站里的笔记：右键菜单必须是"恢复 / 永久删除"，
+    // 老版本一律显示"移动到回收站"（对已经在回收站的笔记毫无意义）。
+    if (note.deleted) {
+      showCtxMenu(x, y, [
+        { label: "恢复这条笔记", action: function () { handleAction("restore", note); } },
+        { label: "复制内容到剪贴板", action: function () { handleAction("share", note); } },
+        { label: "复制内部链接", action: function () { copyInternalLink(note); } },
+        { sep: true },
+        { label: "永久删除", danger: true, action: function () { handleAction("purge", note); } },
+      ]);
+      return;
+    }
     var items = [
       { label: note.pinned ? "取消置顶" : "置顶", action: function () { handleAction("pin", note); } },
       { label: note.markdown ? "关闭 Markdown" : "开启 Markdown", action: function () { handleAction("markdown", note); } },
@@ -1593,9 +1905,6 @@
       { sep: true },
       { label: "复制内部链接", action: function () { copyInternalLink(note); } },
       { label: "复制内容到剪贴板", action: function () { handleAction("share", note); } },
-      { sep: true },
-      { label: "历史记录", action: function () { toast("历史记录功能即将开放"); } },
-      { label: "发布到网络", action: function () { toast("发布功能即将开放"); } },
       { sep: true },
       { label: "移动到回收站", danger: true, action: function () { handleAction("trash", note); } },
     ];
@@ -1924,33 +2233,51 @@
         });
       } catch (e) {}
     }
-    // 标题栏双击最大化 / 还原
+    // 标题栏双击最大化 / 还原（Windows 交给系统标题栏原生处理，不重复绑定）
     var strip = document.getElementById("titlebarStrip");
     if (strip && window.electronAPI && window.electronAPI.toggleMaximize) {
       strip.addEventListener("dblclick", function () {
+        if (document.body.classList.contains("tb-overlay")) return; // 系统已经处理
         window.electronAPI.toggleMaximize();
       });
     }
     // 自定义窗口按钮（最小化 / 最大化 / 关闭）：
-    // 仅 Win/Linux 显示——过去依赖系统 titleBarOverlay，其按钮被整条拖拽区遮挡导致点不动 X。
-    // macOS 保留左上角原生交通灯，这里直接隐藏，避免重复按钮。
+    //   Windows → 系统原生按钮覆盖层（titleBarOverlay），HTML 按钮必须隐藏，否则重复；
+    //   macOS   → 左上角原生交通灯，HTML 按钮隐藏；
+    //   Linux   → 界面自绘按钮（拖拽区已通过 body.tb-custom 让开右侧）。
+    // 用 pointerdown 而不是 click：即使有拖拽区残留，pointerdown 也在"开始拖窗口"之前到达。
     if (window.electronAPI && window.electronAPI.getPlatform && window.electronAPI.minimizeWindow) {
       window.electronAPI
         .getPlatform()
-        .then(function (plat) {
+        .then(function (info) {
+          var plat = (info && info.platform) || (typeof info === "string" ? info : "");
+          var overlay = !!(info && info.overlay);
+          // 没用过这个设置的用户，按平台默认值展示（Linux 默认关闭即退出，其余最小化到托盘）
+          if (info && info.closeDefault && !store.getItem(CLOSE_KEY)) {
+            state.closeBehavior = info.closeDefault;
+            if (el.closeBehaviorSelect) el.closeBehaviorSelect.value = state.closeBehavior;
+          }
           var controls = document.getElementById("winControls");
-          if (!controls) return;
-          if (plat === "darwin") {
-            controls.hidden = true;
+          document.body.classList.remove("tb-overlay", "tb-custom");
+          if (plat === "darwin" || (plat === "win32" && overlay)) {
+            if (plat === "win32") document.body.classList.add("tb-overlay");
+            if (controls) controls.hidden = true;
             return;
           }
+          document.body.classList.add("tb-custom");
+          if (!controls) return;
           controls.hidden = false;
-          var minBtn = document.getElementById("winMinBtn");
-          var maxBtn = document.getElementById("winMaxBtn");
-          var closeBtn = document.getElementById("winCloseBtn");
-          if (minBtn) minBtn.addEventListener("click", function () { window.electronAPI.minimizeWindow(); });
-          if (maxBtn) maxBtn.addEventListener("click", function () { window.electronAPI.toggleMaximize(); });
-          if (closeBtn) closeBtn.addEventListener("click", function () { window.electronAPI.closeWindow(); });
+          var bind = function (node, fn) {
+            if (!node) return;
+            node.addEventListener("pointerdown", function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              fn();
+            });
+          };
+          bind(document.getElementById("winMinBtn"), function () { window.electronAPI.minimizeWindow(); });
+          bind(document.getElementById("winMaxBtn"), function () { window.electronAPI.toggleMaximize(); });
+          bind(document.getElementById("winCloseBtn"), function () { window.electronAPI.closeWindow(); });
         })
         .catch(function () {});
     }
