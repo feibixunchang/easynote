@@ -24,7 +24,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.10";
+  var APP_VERSION = "1.0.11";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -539,6 +539,8 @@
   function renderList() {
     var list = getNotes();
     el.noteList.innerHTML = "";
+    // 列表重绘后旧的滑动行已经不存在了，清掉残留的「收起」引用
+    swipeClose = null;
     if (list.length === 0) {
       var hint = document.createElement("div");
       hint.className = "empty-hint";
@@ -549,6 +551,8 @@
       return;
     }
     list.forEach(function (n) {
+      var row = document.createElement("div");
+      row.className = "swipe-row";
       var item = document.createElement("div");
       item.className = "note-card" + (n.id === state.currentId ? " selected" : "");
       item.setAttribute("data-id", n.id);
@@ -624,10 +628,46 @@
       }
 
       // 点击打开；长按（或鼠标右键）出操作面板
-      item.addEventListener("click", function () { selectNote(n.id); });
+      item.addEventListener("click", function () {
+        // 长按刚弹过面板、或刚做完滑动手势：浏览器还会补发一个 click，这里吞掉，
+        // 否则会出现"点开面板的同时笔记也被打开了"的错乱。
+        if (Date.now() < suppressClickUntil) return;
+        // 这一行正被滑开：任意点击先把它收回去，而不是打开笔记
+        if (row.dataset.open === "1") { closeOpenSwipe(); return; }
+        selectNote(n.id);
+      });
       bindLongPress(item, n);
 
-      el.noteList.appendChild(item);
+      // 卡片下面垫两个动作层：左滑露出右侧「删除」，右滑露出左侧「编辑 / 恢复」
+      var actEdit = document.createElement("button");
+      actEdit.type = "button";
+      actEdit.className = "swipe-act act-edit";
+      actEdit.innerHTML = state.view === "trash"
+        ? '<span class="swipe-ico">♻</span><span>恢复</span>'
+        : '<span class="swipe-ico">✏️</span><span>编辑</span>';
+      actEdit.addEventListener("click", function (e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        closeOpenSwipe();
+        swipePrimary(n);
+      });
+
+      var actDel = document.createElement("button");
+      actDel.type = "button";
+      actDel.className = "swipe-act act-del";
+      actDel.innerHTML = state.view === "trash"
+        ? '<span class="swipe-ico">🗑</span><span>永久删除</span>'
+        : '<span class="swipe-ico">🗑</span><span>删除</span>';
+      actDel.addEventListener("click", function (e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        closeOpenSwipe();
+        swipeDelete(n);
+      });
+
+      row.appendChild(actEdit);
+      row.appendChild(actDel);
+      row.appendChild(item);
+      bindSwipe(row, item, n);
+      el.noteList.appendChild(row);
     });
     updateTrashBar();
   }
@@ -643,9 +683,10 @@
     var inTrash = state.view === "trash";
     // 离开回收站就清空勾选，避免下次进来"莫名其妙已选了几条"
     if (!inTrash) state.selected = {};
-    if (el.trashBar) el.trashBar.hidden = !inTrash;
+    var list = inTrash ? getNotes() : [];
+    // 回收站为空时整条工具栏收起来（原来会留一条"已选 0 / 0 条"的空条）
+    if (el.trashBar) el.trashBar.hidden = !inTrash || list.length === 0;
     if (!inTrash) return;
-    var list = getNotes();
     var alive = {};
     list.forEach(function (n) { alive[n.id] = true; });
     // 搜索 / 刷新后，把已经不在列表里的勾选清掉，避免"看不见却被删掉"
@@ -754,17 +795,129 @@
       suppressClickUntil = Date.now() + 600;
       openNoteSheet(note);
     });
-    node.addEventListener("click", function () {
-      if (Date.now() < suppressClickUntil) {
-        e_stop();
-      }
-    });
-    function e_stop() {
-      suppressClickUntil = 0;
-      // 吞掉长按后浏览器补发的 click
-      node.dataset.skipClick = "1";
-      setTimeout(function () { delete node.dataset.skipClick; }, 50);
+  }
+
+  /* ---------------- 列表手势：左滑删除 / 右滑编辑 ---------------- */
+  // 结构：.swipe-row（overflow:hidden）里垫两个 .swipe-act 动作层，卡片在最上面横向平移。
+  //   左滑 → 露出右侧「删除」；右滑 → 露出左侧「编辑」（回收站里是「恢复」）。
+  //   滑过约半个卡片宽度就直接执行动作，不用再点按钮（与邮件类 App 的手感一致）。
+  var SWIPE_W = 92;      // 松手后停留的位置 = 动作层宽度
+  var swipeClose = null; // 当前打开的那一行的收起函数（同一时刻只允许一行展开）
+
+  function closeOpenSwipe() {
+    if (swipeClose) { var f = swipeClose; swipeClose = null; f(); }
+  }
+
+  // 右滑：笔记 → 打开编辑器；回收站 → 恢复
+  function swipePrimary(note) {
+    if (state.view === "trash") { handleAction("restore", note); return; }
+    selectNote(note.id);
+  }
+
+  // 左滑：笔记 → 移入回收站（带撤销）；回收站 → 永久删除（不可逆，仍然弹确认）
+  function swipeDelete(note) {
+    if (state.view === "trash") { handleAction("purge", note); return; }
+    var id = note.id;
+    note.deleted = true;
+    note.deletedDate = Date.now();
+    note.pinned = false;
+    note.modifiedDate = Date.now();
+    if (state.currentId === id) state.currentId = null;
+    save();
+    renderAll();
+    // 撤销时按 id 重新取一遍：3 秒一轮的同步可能已经把对象换成新的了
+    toast("已移到回收站", "撤销", function () { restoreById(id); });
+  }
+
+  function restoreById(id) {
+    var target = null;
+    state.notes.forEach(function (n) { if (n.id === id) target = n; });
+    if (!target) return;
+    target.deleted = false;
+    target.deletedDate = null;
+    target.modifiedDate = Date.now();
+    save();
+    renderAll();
+    toast("已恢复");
+  }
+
+  function bindSwipe(row, card, note) {
+    var startX = 0, startY = 0, baseX = 0, x = 0, raw = 0;
+    var tracking = false, decided = false, horizontal = false;
+
+    // px 是实际（已经加过阻尼）的位移，raw 是手指真实走了多远：
+    // "整条滑完就执行"要按 raw 判断，否则阻尼把位移压回 92px 附近，永远达不到阈值。
+    function move(px, anim, rawPx) {
+      x = px;
+      raw = typeof rawPx === "number" ? rawPx : px;
+      card.style.transition = anim ? "transform .22s cubic-bezier(.22,.7,.3,1)" : "none";
+      card.style.transform = px ? "translateX(" + px + "px)" : "";
+      if (px) row.dataset.open = "1";
+      else delete row.dataset.open;
     }
+
+    function openAt(px) {
+      closeOpenSwipe();
+      move(px, true);
+      swipeClose = function () { move(0, true); };
+    }
+
+    card.addEventListener("touchstart", function (e) {
+      if (e.touches.length !== 1) return;
+      // 摸到别的行 → 先把展开的那行收回去；这一下只当"收起"，不顺手打开被点的笔记
+      // （与 iOS 邮件/备忘录的手感一致：第一下取消，第二下才进入）
+      if (row.dataset.open !== "1" && swipeClose) {
+        closeOpenSwipe();
+        suppressClickUntil = Date.now() + 450;
+      }
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      baseX = x;
+      tracking = true;
+      decided = false;
+      horizontal = false;
+    }, { passive: true });
+
+    card.addEventListener("touchmove", function (e) {
+      if (!tracking) return;
+      var t = e.touches[0];
+      var dx = t.clientX - startX;
+      var dy = t.clientY - startY;
+      if (!decided) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        decided = true;
+        // 明显偏竖向就当成滚动，把手势交还给列表（否则列表会卡住滑不动）
+        horizontal = Math.abs(dx) > Math.abs(dy) * 1.3;
+        if (!horizontal) { tracking = false; return; }
+        baseX = x;
+      }
+      if (!horizontal) return;
+      if (e.cancelable) e.preventDefault();
+      // 越过停留位置后加阻尼，手感更接近原生
+      var px = baseX + dx;
+      if (px > SWIPE_W) px = SWIPE_W + (px - SWIPE_W) * 0.3;
+      else if (px < -SWIPE_W) px = -SWIPE_W + (px + SWIPE_W) * 0.3;
+      move(px, false, baseX + dx);
+    }, { passive: false });
+
+    function end() {
+      if (!tracking) return;
+      tracking = false;
+      if (!horizontal) return;
+      suppressClickUntil = Date.now() + 350; // 吞掉手势结束后补发的 click
+      // 手指走过卡片宽度的 45%（最多 180px）就算"整条滑完"，直接执行动作
+      var full = Math.min(180, (row.clientWidth || 320) * 0.45);
+      if (raw <= -full) { move(0, true); swipeDelete(note); }
+      else if (raw >= full) { move(0, true); swipePrimary(note); }
+      else if (x <= -SWIPE_W * 0.45) openAt(-SWIPE_W);
+      else if (x >= SWIPE_W * 0.45) openAt(SWIPE_W);
+      else move(0, true);
+    }
+    card.addEventListener("touchend", end);
+    card.addEventListener("touchcancel", function () {
+      tracking = false;
+      move(0, true);
+    });
   }
 
   function setToolbar(note) {
@@ -1219,9 +1372,29 @@
   }
 
   var toastTimer;
-  function toast(msg) {
+  // 支持带一个操作按钮（如「撤销」）：滑动手势删除后可以一键反悔，
+  // 否则误滑一下就得去回收站里捞回来。
+  function toast(msg, actionLabel, actionFn) {
     var t = el.toast;
-    t.textContent = msg;
+    t.innerHTML = "";
+    var span = document.createElement("span");
+    span.textContent = msg;
+    t.appendChild(span);
+    if (actionLabel) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "toast-action";
+      btn.textContent = actionLabel;
+      btn.addEventListener("click", function (e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        clearTimeout(toastTimer);
+        t.classList.remove("show");
+        t.hidden = true;
+        if (actionFn) actionFn();
+      });
+      t.appendChild(btn);
+    }
+    t.classList.toggle("has-action", !!actionLabel);
     t.hidden = false;
     // 强制回流以重启动画
     void t.offsetWidth;
@@ -1229,8 +1402,8 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () {
       t.classList.remove("show");
-      setTimeout(function () { t.hidden = true; }, 200);
-    }, 2000);
+      setTimeout(function () { if (!t.classList.contains("show")) t.hidden = true; }, 200);
+    }, actionLabel ? 5200 : 2000);
   }
 
   /* ---------------- 导出 / 导入 / WebDAV ---------------- */
@@ -2032,6 +2205,8 @@
   /* ---------------- 事件绑定 ---------------- */
   function bindEvents() {
     el.newBtn.addEventListener("click", createNote);
+    // 列表一滚就把滑开的那行收回去，否则滚动时半开的卡片很碍眼
+    el.noteList.addEventListener("scroll", closeOpenSwipe, { passive: true });
     el.btnBack.addEventListener("click", goList);
     el.btnSettingsBack.addEventListener("click", goList);
     el.btnTheme.addEventListener("click", function () {

@@ -811,3 +811,25 @@ button.primary:hover { filter: brightness(1.05); }
   .history-list { flex: 0 0 auto; max-height: 160px; }
   .history-preview { min-height: 140px; max-height: 200px; }
 }
+
+/* ---------------- 下拉框箭头 ----------------
+ * 系统绘制的箭头颜色不跟着 CSS 走：深色模式下仍是近乎黑色的小三角，
+ * 贴在 #1e1e1e / #252525 的深色背景上基本看不见。
+ * 改成自绘 SVG 箭头，浅色用深灰、深色用浅灰。 */
+#sortSelect,
+.setting-row select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 24px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23666666' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  background-size: 9px 6px;
+}
+body.dark #sortSelect,
+body.dark .setting-row select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23bbbbbb' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+/* 其余系统控件（下拉弹层、滚动条）也跟随主题 */
+:root { color-scheme: light; }
+body.dark { color-scheme: dark; }

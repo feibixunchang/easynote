@@ -307,6 +307,42 @@ body.dark .sync-pill.ok { color: #4ade80; }
   user-select: none;
 }
 .note-card:active { background: var(--surface2); }
+
+/* ---------- 左滑删除 / 右滑编辑 ----------
+ * 结构：.swipe-row（裁切容器）→ 两个动作层 + 卡片。
+ * 卡片横向平移把底下的动作层露出来；纵向手势仍交给列表滚动（touch-action: pan-y）。 */
+.swipe-row {
+  position: relative;
+  margin-bottom: 10px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  touch-action: pan-y;
+}
+.swipe-row > .note-card { margin-bottom: 0; }
+.swipe-act {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: #fff;
+  font-family: var(--font);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+.swipe-act .swipe-ico { font-size: 17px; line-height: 1; }
+.swipe-act.act-edit { left: 0; background: var(--accent); }
+.swipe-act.act-del { right: 0; background: var(--danger); }
+.swipe-act:active { filter: brightness(0.9); }
 /* 回收站卡片：右侧留出位置给「♻ 恢复」按钮 */
 .note-card.is-trash { padding-right: 88px; }
 .card-restore {
@@ -840,6 +876,9 @@ body.dark .sync-pill.ok { color: #4ade80; }
   bottom: calc(30px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   background: rgba(20, 23, 30, 0.92);
   color: #fff;
   font-size: 13.5px;
@@ -854,6 +893,20 @@ body.dark .sync-pill.ok { color: #4ade80; }
 }
 .toast.show { opacity: 1; }
 .toast[hidden] { display: none; }
+/* 带「撤销」时提示条需要能点 */
+.toast.has-action { pointer-events: auto; }
+.toast-action {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: #7fb4ff;
+  font-family: var(--font);
+  font-size: 13.5px;
+  font-weight: 700;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.toast-action:active { opacity: 0.6; }
 
 /* ========== 响应式：平板 / 折叠屏 / 横屏（宽 ≥ 720px）→ 双栏 ========== */
 @media (min-width: 720px) {
@@ -902,3 +955,26 @@ body.dark .sync-pill.ok { color: #4ade80; }
   padding: 10px 12px;
   margin-top: 8px;
 }
+
+/* ---------------- 下拉框箭头 ----------------
+ * 系统绘制的箭头颜色不跟随 CSS 颜色：深色模式下仍是近乎黑色的一小块，
+ * 贴在 #1a1d23 的设置卡片上几乎看不见（用户实测反馈）。
+ * 这里改成自绘 SVG 箭头，浅色用灰、深色用浅灰，两端都清楚。
+ * 注意：select 用了 direction: rtl 让值靠右对齐，系统箭头原本在左边，
+ * 所以箭头也放在左边，保持原来的视觉位置不变。 */
+.set-field select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-left: 18px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 10px 6px;
+}
+:root.dark .set-field select,
+body.dark .set-field select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23aab2bd' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+/* 让系统控件（下拉弹层、滚动条、搜索框清除按钮）也跟着深色走 */
+:root { color-scheme: light; }
+:root.dark, body.dark { color-scheme: dark; }
