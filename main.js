@@ -888,6 +888,9 @@ ipcMain.handle("open-external", function (_e, url) {
   if (m) {
     let p = decodeURIComponent(m[1]);
     if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1); // Windows: /C:/x → C:/x
+    // 只允许图片类型：否则笔记里写一个 easynote-file:// 链接，点一下就能
+    // 打开任意本地文件（甚至是可执行文件）。与 easynote-file 协议放行范围一致。
+    if (!IMG_MIME_BY_EXT[path.extname(p).toLowerCase()]) return;
     shell.openPath(p);
   }
 });

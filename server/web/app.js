@@ -1891,16 +1891,57 @@
   }
   // 拉取合并：服务端版本更新则采用服务端的；本地修改更新则保留本地。
   // 返回是否有实际变更（决定是否需要重存/重渲染，避免每 3 秒无意义地全量重写）。
+  // 合法笔记 id（与 server 端校验一致）：挡掉脏 id / 会引发原型污染的键
+  var NOTE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  function isValidNoteId(id) {
+    if (typeof id !== "string" || !NOTE_ID_RE.test(id)) return false;
+    return id !== "__proto__" && id !== "constructor" && id !== "prototype";
+  }
+  var pendingConflictCount = 0; // 本轮同步产生了多少条冲突副本（用于提示用户）
+  // 双端同时修改同一篇笔记时，把"本机尚未同步成功的版本"另存为一条独立笔记
+  // （冲突副本），避免被服务端版本直接覆盖导致改动静默丢失。
+  function makeConflictCopy(loc) {
+    var now = Date.now();
+    var title = "无标题";
+    var lines = (loc.content || "").split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].trim()) { title = lines[i].trim().slice(0, 30); break; }
+    }
+    return {
+      id: uid(),
+      content:
+        "⚠ 冲突副本（本机版本 · 另一台设备也修改过这条笔记）\n" +
+        "原笔记标题：" + title + "\n" +
+        "生成时间：" + new Date(now).toLocaleString("zh-CN") + "\n\n" +
+        (loc.content || ""),
+      pinned: false, markdown: !!loc.markdown, deleted: false,
+      color: loc.color || "",
+      createdDate: loc.createdDate || now,
+      modifiedDate: now,
+    };
+  }
   function mergeNotes(incoming) {
     var byId = {};
     state.notes.forEach(function (n) { if (n && n.id) byId[n.id] = n; });
     var changed = false;
+    var conflicts = [];
     (incoming || []).forEach(function (n) {
-      if (!n || !n.id) return;
+      if (!n || !isValidNoteId(n.id)) return;
       var loc = byId[n.id];
       if (!loc) { byId[n.id] = n; changed = true; return; }
-      if ((n.modifiedDate || 0) > (loc.modifiedDate || 0)) { byId[n.id] = n; changed = true; }
+      if ((n.modifiedDate || 0) > (loc.modifiedDate || 0)) {
+        // 本地有"还没推送成功"的改动，且服务端版本内容不同 → 先留一份冲突副本再覆盖
+        var pushedAt = (state.pushed && state.pushed[n.id]) || 0;
+        var localDirty = (loc.modifiedDate || 0) > pushedAt;
+        if (localDirty && (loc.content || "") !== (n.content || "")) conflicts.push(makeConflictCopy(loc));
+        byId[n.id] = n; changed = true;
+      }
     });
+    if (conflicts.length) {
+      conflicts.forEach(function (c) { byId[c.id] = c; });
+      pendingConflictCount += conflicts.length;
+      changed = true;
+    }
     state.notes = Object.keys(byId).map(function (k) { return byId[k]; });
     return changed;
   }
@@ -1943,7 +1984,7 @@
     // 跨端墓碑：其他设备永久删除的笔记，本地也清掉，保持回收站一致
     if (res && res.removed && res.removed.length) {
       var removedSet = {};
-      res.removed.forEach(function (id) { removedSet[id] = true; if (state.purged.indexOf(id) === -1) state.purged.push(id); dropHistory(id); });
+      res.removed.forEach(function (id) { if (!isValidNoteId(id)) return; removedSet[id] = true; if (state.purged.indexOf(id) === -1) state.purged.push(id); dropHistory(id); });
       store.setItem(PURGE_KEY, JSON.stringify(state.purged));
       var before = state.notes.length;
       state.notes = state.notes.filter(function (n) { return !removedSet[n.id]; });
@@ -1998,6 +2039,11 @@
         var r = applySyncResponse(res);
         if (!r.shrink) {
           if (r.changed) { saveLocalOnly(); render(); } // 有其他设备的改动才重存/重渲染
+          if (pendingConflictCount > 0) {
+            // 双端同时改同一篇：已保底为冲突副本，明确提示用户，避免以为"改动丢了"
+            toast("检测到 " + pendingConflictCount + " 条笔记在多端同时修改，已保留为「冲突副本」，请查看");
+            pendingConflictCount = 0;
+          }
           if (pending.length || r.changed) {
             markPushedAfterRound(pushedPayload, r.confirmed);
             updateImgFixStatus(); // 同步后重新检测外链图片

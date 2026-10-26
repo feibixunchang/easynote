@@ -24,7 +24,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.12";
+  var APP_VERSION = "1.0.13";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -1879,16 +1879,57 @@
     clearTimeout(syncTimer);
     syncTimer = setTimeout(syncAll, SYNC_DEBOUNCE_MS);
   }
+  // 合法笔记 id（与 server 端校验一致）：挡掉脏 id / 会引发原型污染的键
+  var NOTE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  function isValidNoteId(id) {
+    if (typeof id !== "string" || !NOTE_ID_RE.test(id)) return false;
+    return id !== "__proto__" && id !== "constructor" && id !== "prototype";
+  }
+  var pendingConflictCount = 0; // 本轮同步产生了多少条冲突副本（用于提示用户）
+  // 双端同时修改同一篇笔记时，把"本机尚未同步成功的版本"另存为一条独立笔记
+  // （冲突副本），避免被服务端版本直接覆盖导致改动静默丢失。
+  function makeConflictCopy(loc) {
+    var now = Date.now();
+    var title = "无标题";
+    var lines = (loc.content || "").split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].trim()) { title = lines[i].trim().slice(0, 30); break; }
+    }
+    return {
+      id: uid(),
+      content:
+        "⚠ 冲突副本（本机版本 · 另一台设备也修改过这条笔记）\n" +
+        "原笔记标题：" + title + "\n" +
+        "生成时间：" + new Date(now).toLocaleString("zh-CN") + "\n\n" +
+        (loc.content || ""),
+      pinned: false, markdown: !!loc.markdown, deleted: false,
+      color: loc.color || "",
+      createdDate: loc.createdDate || now,
+      modifiedDate: now,
+    };
+  }
   function mergeNotes(incoming) {
     var byId = {};
     state.notes.forEach(function (n) { if (n && n.id) byId[n.id] = n; });
     var changed = false;
+    var conflicts = [];
     (incoming || []).forEach(function (n) {
-      if (!n || !n.id) return;
+      if (!n || !isValidNoteId(n.id)) return;
       var loc = byId[n.id];
       if (!loc) { byId[n.id] = n; changed = true; return; }
-      if ((n.modifiedDate || 0) > (loc.modifiedDate || 0)) { byId[n.id] = n; changed = true; }
+      if ((n.modifiedDate || 0) > (loc.modifiedDate || 0)) {
+        // 本地有"还没推送成功"的改动，且服务端版本内容不同 → 先留一份冲突副本再覆盖
+        var pushedAt = (state.pushed && state.pushed[n.id]) || 0;
+        var localDirty = (loc.modifiedDate || 0) > pushedAt;
+        if (localDirty && (loc.content || "") !== (n.content || "")) conflicts.push(makeConflictCopy(loc));
+        byId[n.id] = n; changed = true;
+      }
     });
+    if (conflicts.length) {
+      conflicts.forEach(function (c) { byId[c.id] = c; });
+      pendingConflictCount += conflicts.length;
+      changed = true;
+    }
     state.notes = Object.keys(byId).map(function (k) { return byId[k]; });
     return changed;
   }
@@ -1925,7 +1966,7 @@
     // 跨端墓碑：其他设备永久删除的笔记，本地也清掉，保持回收站一致
     if (res && res.removed && res.removed.length) {
       var removedSet = {};
-      res.removed.forEach(function (id) { removedSet[id] = true; if (state.purged.indexOf(id) === -1) state.purged.push(id); });
+      res.removed.forEach(function (id) { if (!isValidNoteId(id)) return; removedSet[id] = true; if (state.purged.indexOf(id) === -1) state.purged.push(id); });
       store.setItem(PURGE_KEY, JSON.stringify(state.purged));
       var before = state.notes.length;
       state.notes = state.notes.filter(function (n) { return !removedSet[n.id]; });
@@ -1977,6 +2018,11 @@
         var r = applySyncResponse(res);
         if (!r.shrink) {
           if (r.changed) { saveLocalOnly(); renderAll(); }
+          if (pendingConflictCount > 0) {
+            // 双端同时改同一篇：已保底为冲突副本，明确提示用户，避免以为"改动丢了"
+            toast("检测到 " + pendingConflictCount + " 条笔记在多端同时修改，已保留为「冲突副本」，请查看");
+            pendingConflictCount = 0;
+          }
           if (pending.length || r.changed) {
             markPushedAfterRound(pushedPayload, r.confirmed);
             updateImgFixStatus();

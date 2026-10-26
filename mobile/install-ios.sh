@@ -172,6 +172,6 @@ say "==> 3/3 启动 App..."
 xcrun devicectl device process launch --device "$UDID" com.feibixunchang.easynote || true
 
 say ""
-say "✅ 完成！去手机桌面找「简易笔记」图标（版本 $VER）。"
+say "✅ 完成！去手机桌面找「简易笔记」图标。"
 say "   （首次打开若提示「未受信任的开发者」：设置 → 通用 → VPN 与设备管理 → 开发者 App → 信任）"
 say "   （免费 Apple ID 签的 App 7 天过期，到期重跑本脚本即可）"

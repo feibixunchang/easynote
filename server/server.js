@@ -16,7 +16,7 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 // 服务端版本（不跟桌面端版本号走）：客户端「同步诊断」会读它，
 // 方便判断连的是不是旧版服务端（例如不支持增量同步的老版本）。
-const SERVER_VERSION = "1.3.0";
+const SERVER_VERSION = "1.4.0";
 const SECRET = process.env.JWT_SECRET || "simplenote-zh-dev-secret-change-me";
 // 请求体上限：客户端「一键修复」会把图片转成 base64 内嵌进笔记，同步时整批笔记
 // （含内嵌图片）可能达数 MB~数十 MB，Express 默认 100kb 会返回 413 导致同步失败。
@@ -59,6 +59,85 @@ const NOTES_DIR = path.join(DATA_DIR, "notes");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(NOTES_DIR, { recursive: true });
 if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, "{}");
+
+/* ============ 存储层工具（数据安全）============ */
+// 原子写 + 保留一份 .bak：先写 .tmp 再 rename（同目录 rename 是原子操作）。
+// 之前直接 fs.writeFileSync 覆盖：若写到一半进程被杀 / 断电，JSON 会被截断，
+// 而解析失败时 loadNotes 会 return {}，等于该用户整库笔记瞬间"消失"。这里彻底避免。
+function writeFileAtomic(file, str) {
+  var tmp = file + ".tmp";
+  fs.writeFileSync(tmp, str);
+  try { if (fs.existsSync(file)) fs.copyFileSync(file, file + ".bak"); } catch (e) {}
+  fs.renameSync(tmp, file);
+}
+// 读取 JSON；主文件损坏时自动回退到 .bak（配合上面的原子写，抗截断）
+function readJsonWithBak(file) {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) {}
+  try {
+    var bak = JSON.parse(fs.readFileSync(file + ".bak", "utf8"));
+    console.warn("[easynote] " + file + " 解析失败，已用 .bak 恢复");
+    return bak;
+  } catch (e2) { return null; }
+}
+// 把解析出来的普通对象转成"无原型字典"：当 id / 用户名是 __proto__ 这类键时，
+// 普通对象会发生原型污染（污染后 Object.keys 行为异常，甚至造成数据"消失"）。
+function toDict(obj) {
+  var d = Object.create(null);
+  if (obj && typeof obj === "object") {
+    Object.keys(obj).forEach(function (k) { d[k] = obj[k]; });
+  }
+  return d;
+}
+// 合法笔记 id：客户端 uid() 生成（n_xxx）。只放行字母数字下划线连字符，挡掉
+// __proto__ / 超长 / 带路径分隔符的 id，避免污染与脏数据入库。
+const NOTE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const RESERVED_KEYS = ["__proto__", "constructor", "prototype"];
+function isValidId(id) {
+  if (typeof id !== "string" || !NOTE_ID_RE.test(id)) return false;
+  // __proto__ / constructor / prototype 虽然也满足上面的字符集，但作为 Object 的键
+  // 会触发原型污染（客户端把结果塞进普通对象时，笔记会"消失"），这里明确拒绝。
+  return RESERVED_KEYS.indexOf(id) === -1;
+}
+
+/* ============ 单调入库时间戳（增量同步不丢数据的关键）============
+ * 增量同步以"服务端入库时间"为游标。若直接用 Date.now()：两台设备在同一毫秒
+ * 发生改动时，A 收到的 serverTime 可能已经 >= B 这次写库的时间，B 的这条改动
+ * 就永远落在游标"之前" → 该设备永久漏同步。
+ * 这里保证每次入库时间戳严格递增（同毫秒则 +1），游标取"已分配的最大时间戳"，
+ * 于是"大于游标"的过滤永远不漏。 */
+let lastStamp = 0;
+function nextStamp() {
+  var t = Date.now();
+  if (t <= lastStamp) t = lastStamp + 1;
+  lastStamp = t;
+  return t;
+}
+// 启动时把时间戳底线抬到"已有数据的最大时间戳"之上（含重启前的旧数据 / 时钟偏快的数据）
+function initStampFloor() {
+  var max = Date.now();
+  try {
+    fs.readdirSync(NOTES_DIR).forEach(function (f) {
+      if (!/\.json$/.test(f) || /\.(tmp|bak)$/.test(f)) return;
+      var obj = readJsonWithBak(path.join(NOTES_DIR, f));
+      if (!obj || typeof obj !== "object") return;
+      Object.keys(obj).forEach(function (k) {
+        var v = obj[k];
+        var s = (v && typeof v === "object")
+          ? (typeof v.storedAt === "number" ? v.storedAt : (v.modifiedDate || v.deletedDate || 0))
+          : (typeof v === "number" ? v : 0);
+        if (s > max) max = s;
+      });
+    });
+  } catch (e) {}
+  lastStamp = max;
+}
+initStampFloor();
+// 响应里给客户端的游标：取已分配的最大时间戳（不回退，兼容老客户端的毫秒游标）
+function cursorNow(since) {
+  return Math.max(lastStamp, since || 0);
+}
+// 是否在用内置默认密钥（公网部署时是严重风险，启动会醒目告警）
+const USING_DEFAULT_SECRET = !process.env.JWT_SECRET;
 
 /* ============ 简易限速（进程内存，重启即清空）============
  * 目的：公网开放后防暴力破解（登录）与批量注册（注册）。
@@ -115,28 +194,35 @@ setInterval(function () {
 }, 10 * 60 * 1000).unref();
 
 function loadUsers() {
-  try { return JSON.parse(fs.readFileSync(USERS_FILE, "utf8")); } catch (e) { return {}; }
+  return toDict(readJsonWithBak(USERS_FILE));
 }
 function saveUsers(u) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(u, null, 2));
+  writeFileAtomic(USERS_FILE, JSON.stringify(u, null, 2));
 }
 function userNotesFile(u) {
-  return path.join(NOTES_DIR, u + ".json");
+  var p = path.join(NOTES_DIR, u + ".json");
+  // 防御路径穿越：用户名含 / 或 .. 时，最终文件会跑出 NOTES_DIR，直接拒绝
+  if (path.dirname(p) !== NOTES_DIR) {
+    var err = new Error("BAD_USERNAME");
+    err.code = "BAD_USERNAME";
+    throw err;
+  }
+  return p;
 }
 function loadNotes(u) {
-  try {
-    var notes = JSON.parse(fs.readFileSync(userNotesFile(u), "utf8")) || {};
-    // 迁移：老数据没有 storedAt（服务端入库时间）。增量游标以它为准，
-    // 用 modifiedDate 兜底并封顶为当前时间（防止客户端时钟偏快导致永远被重复返回）。
-    var now = Date.now();
-    Object.keys(notes).forEach(function (k) {
-      var n = notes[k];
-      if (n && typeof n.storedAt !== "number") {
-        n.storedAt = Math.min(n.modifiedDate || n.deletedDate || 0, now);
-      }
-    });
-    return notes;
-  } catch (e) { return {}; }
+  var notes = toDict(readJsonWithBak(userNotesFile(u)));
+  // 迁移：老数据没有 storedAt（服务端入库时间）。用"单调时间戳"补齐并立即落盘，
+  // 避免每次读取都重新赋值导致游标抖动 / 老笔记被反复重发。
+  var migrated = false;
+  Object.keys(notes).forEach(function (k) {
+    var n = notes[k];
+    if (n && typeof n === "object" && typeof n.storedAt !== "number") {
+      n.storedAt = nextStamp();
+      migrated = true;
+    }
+  });
+  if (migrated) { try { saveNotes(u, notes); } catch (e) {} }
+  return notes;
 }
 function saveNotes(u, obj) {
   var json = JSON.stringify(obj);
@@ -147,7 +233,7 @@ function saveNotes(u, obj) {
     err.code = "QUOTA_EXCEEDED";
     throw err;
   }
-  fs.writeFileSync(userNotesFile(u), json);
+  writeFileAtomic(userNotesFile(u), json);
 }
 // 墓碑（已永久删除的笔记 ID）：跨端传播，防止其他设备把已被永久删除的笔记重新拉回来。
 // 单独存一个文件，避免与 notes 对象混淆。
@@ -155,14 +241,12 @@ function userTombFile(u) {
   return path.join(NOTES_DIR, u + ".tomb.json");
 }
 function loadTombstones(u) {
-  try {
-    var t = JSON.parse(fs.readFileSync(userTombFile(u), "utf8")) || {};
-    if (typeof t !== "object" || Array.isArray(t)) return {};
-    return t;
-  } catch (e) { return {}; }
+  var t = readJsonWithBak(userTombFile(u));
+  if (!t || typeof t !== "object" || Array.isArray(t)) return Object.create(null);
+  return toDict(t);
 }
 function saveTombstones(u, obj) {
-  fs.writeFileSync(userTombFile(u), JSON.stringify(obj));
+  writeFileAtomic(userTombFile(u), JSON.stringify(obj));
 }
 // 增量返回：游标之后新增/更新的墓碑 ID
 function tombsSince(tombs, since) {
@@ -179,7 +263,7 @@ function auth(req, res, next) {
   const m = h.match(/^Bearer\s+(.+)$/);
   if (!m) return res.status(401).json({ error: "未授权" });
   try {
-    req.user = jwt.verify(m[1], SECRET).username;
+    req.user = jwt.verify(m[1], SECRET, { algorithms: ["HS256"] }).username;
     next();
   } catch (e) {
     return res.status(401).json({ error: "登录已过期，请重新登录" });
@@ -243,6 +327,14 @@ app.post("/api/register", (req, res) => {
     });
   }
   if (username.length < 2) return res.status(400).json({ error: "用户名至少 2 个字符" });
+  if (username.length > 32) return res.status(400).json({ error: "用户名不能超过 32 个字符" });
+  // 用户名会被用作数据文件名，必须挡掉路径分隔符 / 上跳 / 控制字符（防止路径穿越），
+  // 以及会引发原型污染的名字。中文用户名不受影响，正常使用即可。
+  if (/[\/\\]/.test(username) || username.indexOf("..") !== -1 ||
+      /[\u0000-\u001f]/.test(username) || username === "." ||
+      username === "__proto__" || username === "constructor" || username === "prototype") {
+    return res.status(400).json({ error: "用户名包含不被允许的字符（不能含 / \\ .. 或控制字符）" });
+  }
   if (password.length < MIN_PASSWORD_LEN) {
     return res.status(400).json({ error: "密码至少 " + MIN_PASSWORD_LEN + " 位（密码越强度越高，越难被破解）" });
   }
@@ -252,7 +344,7 @@ app.post("/api/register", (req, res) => {
   if (users[username]) return res.status(409).json({ error: "该用户名已被注册" });
   users[username] = { username: username, passwordHash: bcrypt.hashSync(password, BCRYPT_ROUNDS) };
   saveUsers(users);
-  const token = jwt.sign({ username: username }, SECRET, { expiresIn: "30d" });
+  const token = jwt.sign({ username: username }, SECRET, { expiresIn: "30d", algorithm: "HS256" });
   res.json({ token: token, username: username });
 });
 
@@ -281,7 +373,7 @@ app.post("/api/login", (req, res) => {
   // 刻意不因"账号被锁"而拦住正确密码：否则攻击者只要知道用户名就能把主人反锁在门外（拒绝服务）。
   clearLoginFail(ip);
   clearLoginFail(username);
-  const token = jwt.sign({ username: username }, SECRET, { expiresIn: "30d" });
+  const token = jwt.sign({ username: username }, SECRET, { expiresIn: "30d", algorithm: "HS256" });
   res.json({ token: token, username: username });
 });
 
@@ -305,22 +397,24 @@ app.get("/api/notes", auth, (req, res) => {
   var list = since > 0 ? changedSince(all, since) : all;
   var tombs = loadTombstones(req.user);
   var removed = since > 0 ? tombsSince(tombs, since) : Object.keys(tombs);
-  res.json({ notes: list, removed: removed, serverTime: Date.now(), total: all.length });
+  res.json({ notes: list, removed: removed, serverTime: cursorNow(since), total: all.length });
 });
 
 // 永久删除：客户端把要彻底删除的笔记 ID 上报，服务端删除笔记并记入墓碑。
 // 其他设备下一次同步会收到 removed，从而把已被永久删除的笔记从本地清掉（跨端一致）。
 app.post("/api/notes/purge", auth, (req, res) => {
-  const ids = (req.body && req.body.ids) || [];
-  if (!Array.isArray(ids) || !ids.length) return res.json({ ok: true, removed: [] });
+  const raw = (req.body && req.body.ids) || [];
+  if (!Array.isArray(raw) || !raw.length) return res.json({ ok: true, removed: [] });
+  // 只接受合法 id，并限制单次数量（防脏数据 / 请求过大）
+  const ids = raw.filter(isValidId).slice(0, 5000);
+  if (!ids.length) return res.json({ ok: true, removed: [] });
   const store = loadNotes(req.user);
   const tombs = loadTombstones(req.user);
-  const now = Date.now();
+  const now = nextStamp(); // 墓碑时间戳也用单调时间戳（供"删除后新修改才可复活"判定）
   var changed = false;
   ids.forEach((id) => {
-    if (!id) return;
     if (store[id]) { delete store[id]; changed = true; }
-    tombs[id] = now; // 记入墓碑（含时间戳，供增量同步）
+    tombs[id] = now;
   });
   if (changed) saveNotes(req.user, store);
   saveTombstones(req.user, tombs);
@@ -330,44 +424,37 @@ app.post("/api/notes/purge", auth, (req, res) => {
 // 同步（推送 + 合并 + 返回增量或完整集合，按 modifiedDate 后写覆盖）。
 // 请求体可带 since：只返回该时刻之后入库的笔记，实现"近实时同步"的轻量轮询。
 app.post("/api/notes/sync", auth, (req, res) => {
-  const incoming = (req.body && req.body.notes) || [];
+  const rawIncoming = (req.body && req.body.notes) || [];
+  const incoming = Array.isArray(rawIncoming) ? rawIncoming.slice(0, 20000) : [];
   const since = parseInt(req.body && req.body.since, 10) || 0;
   const store = loadNotes(req.user);
   const tombs = loadTombstones(req.user);
-  var changed = false;
+  var changed = false, tombsChanged = false;
+  const rejected = []; // 被墓碑挡下的 id：回给客户端，让本地也清掉
   incoming.forEach((n) => {
-    if (!n || !n.id) return;
+    if (!n || !isValidId(n.id)) return; // 脏 id / __proto__ 等一律拒收
+    const tombAt = tombs[n.id];
+    // 墓碑保护（关键）：只有当这次修改"晚于删除时间"（真正的撤销删除 / 重新创建）
+    // 才允许清除墓碑；否则拒绝写入并把它放回 removed。
+    // 否则：A 设备永久删除后，B 设备在收到墓碑前把自己的旧副本推上来，
+    // 会把已删除的笔记"复活"到所有设备。
+    if (tombAt && !((n.modifiedDate || 0) > tombAt)) { rejected.push(n.id); return; }
     const ex = store[n.id];
     if (!ex || (n.modifiedDate || 0) >= (ex.modifiedDate || 0)) {
-      n.storedAt = Date.now(); // 服务端入库时间：增量游标以此为基准
+      n.storedAt = nextStamp(); // 单调入库时间：增量游标以此为基准（严格递增，不漏）
       store[n.id] = n;
       changed = true;
-      if (tombs[n.id]) { delete tombs[n.id]; } // 重新创建/恢复的同 ID 笔记，撤销墓碑
+      if (tombAt) { delete tombs[n.id]; tombsChanged = true; }
     }
   });
   if (changed) saveNotes(req.user, store);
-  if (changed || Object.keys(tombs).length) {
-    // 仅在确实改动时重写墓碑（减少无谓写入）；但上面若删了墓碑需保存
-    if (tombsDirty(tombs, req.user)) saveTombstones(req.user, tombs);
-  }
+  if (tombsChanged) saveTombstones(req.user, tombs);
   var all = Object.keys(store).map((k) => store[k]);
   var list = since > 0 ? changedSince(all, since) : all;
   var removed = since > 0 ? tombsSince(tombs, since) : Object.keys(tombs);
-  res.json({ notes: list, removed: removed, serverTime: Date.now(), total: all.length });
+  rejected.forEach((id) => { if (removed.indexOf(id) === -1) removed.push(id); });
+  res.json({ notes: list, removed: removed, serverTime: cursorNow(since), total: all.length });
 });
-
-// 判断墓碑是否相比磁盘发生变化（避免每次轮询都写盘）
-function tombsDirty(tombs, u) {
-  try {
-    var onDisk = loadTombstones(u);
-    var ak = Object.keys(tombs), bk = Object.keys(onDisk);
-    if (ak.length !== bk.length) return true;
-    for (var i = 0; i < ak.length; i++) {
-      if (!(ak[i] in onDisk) || onDisk[ak[i]] !== tombs[ak[i]]) return true;
-    }
-    return false;
-  } catch (e) { return true; }
-}
 
 // 统一错误输出为 JSON：否则 body-parser 的 413 会返回 HTML 错误页，
 // 客户端只能显示「服务器返回错误 (413)」，用户看不懂该怎么处理。
@@ -427,6 +514,14 @@ app.listen(PORT, HOST, () => {
     });
   }
   console.log("监听地址：" + HOST + ":" + PORT + "（0.0.0.0 表示所有网卡，局域网均可访问）");
+  if (USING_DEFAULT_SECRET) {
+    console.warn("");
+    console.warn("⚠️  安全提醒：正在使用内置默认 JWT_SECRET。");
+    console.warn("    这意味着任何知道你服务地址的人都能伪造登录令牌、读取/篡改所有账号数据。");
+    console.warn("    仅在本机 / 纯内网测试时可接受。公网部署请设置环境变量：");
+    console.warn("      JWT_SECRET=<够长的随机串，例如 openssl rand -hex 32>");
+    console.warn("");
+  }
 });
 
 // 常见局域网网段优先，VPN/虚拟网卡地址排在后面；Docker 网桥段(172.17~172.31)不展示
