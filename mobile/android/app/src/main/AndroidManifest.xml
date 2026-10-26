@@ -39,4 +39,11 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- 生物识别（面容 / 指纹解锁）：
+         androidx.biometric 在 API 28+ 走 BiometricPrompt，需要 USE_BIOMETRIC；
+         API 24-27 仍走 FingerprintManager，需要 USE_FINGERPRINT。
+         库自身的 manifest 未声明，靠这里补（重复声明由 manifest merger 去重）。 -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 </manifest>
