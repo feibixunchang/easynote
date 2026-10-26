@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.18";
+  var APP_VERSION = "1.0.20";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -2064,6 +2064,8 @@
   /* ---------------- 更新检查（只认 mobile-v 开头的移动端版本） ---------------- */
   var REPO = "feibixunchang/easynote";
   var MOBILE_TAG_RE = /^mobile-v(\d+(?:\.\d+){1,2})$/;
+  // 软件发布页（抽屉入口 & 更新提示的"前往下载"共用）
+  var RELEASES_URL = "https://github.com/feibixunchang/easynote/releases";
   function fetchWithTimeout(url, ms) {
     var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     var timer = controller ? setTimeout(function () { controller.abort(); }, ms || 12000) : null;
@@ -2215,6 +2217,12 @@
       for (var d = 0; d < drawerBtns.length; d++) {
         (function (btn) {
           btn.addEventListener("click", function () {
+            // 「软件发布页」：不是视图切换，直接用系统浏览器打开
+            if (btn.getAttribute("data-action") === "releases") {
+              closeDrawer();
+              openUrl(RELEASES_URL);
+              return;
+            }
             var v = btn.getAttribute("data-view");
             closeDrawer();
             if (v === "settings") { goSettings(); return; }

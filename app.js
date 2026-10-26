@@ -39,6 +39,8 @@
   var IMGMODE_KEY = "simplenote_zh_imgmode"; // embed | path（插入图片的方式）
   var CLOSE_KEY = "simplenote_zh_close";     // tray | quit（点 ✕ 时的行为）
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
+  // 软件发布页（侧栏入口 & 更新失败时的"下载页"出口共用）
+  var RELEASES_URL = "https://github.com/feibixunchang/easynote/releases";
   var HISTORY_KEY = "simplenote_zh_history";     // 笔记历史快照（仅本地，不上传、不参与同步）
   // 纯浏览器环境（无 Electron）下的回退字体清单（均为 Windows 常见中文字体）
   var FALLBACK_FONTS = [
@@ -424,6 +426,7 @@
     el.btnEmbedImages = document.getElementById("btnEmbedImages");
     el.imgFixStatus = document.getElementById("imgFixStatus");
     el.navSettings = document.getElementById("navSettings");
+    el.navReleases = document.getElementById("navReleases");
     el.settingsModal = document.getElementById("settingsModal");
     el.settingsClose = document.getElementById("settingsClose");
     el.themeModeSelect = document.getElementById("themeModeSelect");
@@ -1229,6 +1232,13 @@
     el.navNotes.addEventListener("click", function () {
       state.view = "notes"; state.activeTag = null; render();
     });
+    // 侧栏「软件发布页」：打开 GitHub Releases（下载最新版 / 看更新说明）
+    if (el.navReleases) {
+      el.navReleases.addEventListener("click", function () {
+        if (api && api.openExternal) api.openExternal(RELEASES_URL);
+        else window.open(RELEASES_URL, "_blank");
+      });
+    }
     el.navTrash.addEventListener("click", function () {
       state.view = "trash"; render();
     });

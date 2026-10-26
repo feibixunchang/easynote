@@ -277,21 +277,42 @@ function downloadAsset(orderedUrls, dest, onProgress) {
  * 之前的问题：安装启动不可靠 + 失败也照样 app.exit(0) → 用户看到"进度条走完 → 应用自己关了 →
  * 什么都没装"，只能自己去发布页重新下载。 */
 function quitSoon(ms) {
-  setTimeout(function () { app.exit(0); }, ms || 1800);
+  setTimeout(function () { app.exit(0); }, ms || 800);
+}
+
+/* -- 等本进程真正退出，再执行安装动作 --
+ * NSIS 安装器会检测同名程序是否在运行，macOS 的运行中 .app 也删不掉；
+ * 而 Windows 默认「关闭到托盘」，点 X 只隐藏窗口、进程还在
+ * -> 安装时弹出「简易笔记无法关闭，请手动关闭它，然后单击重试以继续」。
+ * 做法：先起一个游离进程盯住我们的 PID，等我们退出后再动手，从根上消除竞态。 */
+function spawnAfterExitPosix(cmd) {
+  const pid = process.pid;
+  return spawn("/bin/sh", ["-c", "while kill -0 " + pid + " 2>/dev/null; do sleep 0.2; done; " + cmd],
+    { detached: true, stdio: "ignore" });
+}
+function spawnAfterExitWin(exePath) {
+  const pid = process.pid;
+  const safe = String(exePath).split(String.fromCharCode(39)).join(String.fromCharCode(39, 39));
+  const ps = "Wait-Process -Id " + pid + " -ErrorAction SilentlyContinue; "
+    + "Start-Sleep -Milliseconds 800; Start-Process -FilePath " + String.fromCharCode(39) + safe + String.fromCharCode(39);
+  return spawn("powershell",
+    ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
+    { detached: true, stdio: "ignore" });
 }
 
 function installWin(filePath) {
-  // 优先用系统"打开方式"（ShellExecute）：.exe 自带的 UAC 清单由系统正确接管，
-  // 比自己拼 cmd 命令可靠；失败再退回 detached cmd（等旧客户端退出后再启动向导）。
+  // 必须"先退出、再安装"：否则 NSIS 会弹「无法关闭，请手动关闭它」。
+  // ① 首选 PowerShell 盯 PID，等本进程消失后再拉起安装向导
   try {
-    const err = shell.openPath(filePath);
-    if (!err) return { ok: true, message: "安装向导已启动" };
-  } catch (e) { /* 继续尝试下面的方式 */ }
+    spawnAfterExitWin(filePath).unref();
+    return { ok: true, message: "应用即将退出，安装向导会自动打开" };
+  } catch (e) { /* 继续尝试 ② */ }
+  // ② 退回 detached cmd：延时约 4 秒（足够我们退出）后再启动安装向导
   try {
-    const q = '"' + String(filePath).replace(/"/g, '""') + '"';
+    const q = '"' + String(filePath).replace(/"/g, String.fromCharCode(39, 39)) + '"';
     const comspec = process.env.ComSpec || "cmd.exe";
-    spawn(comspec, ["/c", "ping -n 3 127.0.0.1 >nul && " + q], { detached: true, stdio: "ignore" }).unref();
-    return { ok: true, message: "安装向导已启动" };
+    spawn(comspec, ["/c", "ping -n 5 127.0.0.1 >nul && " + q], { detached: true, stdio: "ignore" }).unref();
+    return { ok: true, message: "应用即将退出，安装向导会自动打开" };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
@@ -314,14 +335,14 @@ function installMac(dmgPath) {
       // 旧客户端必须先退出才能替换（运行中的 app 删不掉），交给独立 shell 延迟执行
       const plain = "rm -rf " + shellQuote(destApp) + " && cp -R " + shellQuote(srcApp) + " " + shellQuote(destApp);
       const apple = 'do shell script ' + appleQuote(plain) + " with administrator privileges";
+      // 同样"等我们退出后再替换"：运行中的 .app 删不掉（Text file busy）
       const script =
-        "sleep 1; " +
         "(" + plain + ") 2>/dev/null || osascript -e " + shellQuote(apple) + "; " +
         "hdiutil detach " + shellQuote(mount) + " -force >/dev/null 2>&1; " +
         "open " + shellQuote(destApp) + " 2>/dev/null || open " + shellQuote(srcApp);
       try {
-        spawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" }).unref();
-        resolve({ ok: true, message: "正在安装（可能弹出管理员授权）" });
+        spawnAfterExitPosix(script).unref();
+        resolve({ ok: true, message: "应用即将退出，更新会在后台完成并自动重新打开" });
       } catch (e) {
         resolve({ ok: false, error: String((e && e.message) || e) });
       }
@@ -334,32 +355,36 @@ function installLinux(filePath, name) {
   const isAppImage = /\.AppImage$/i.test(name);
   return new Promise(function (resolve) {
     if (isAppImage && appImage) {
-      // AppImage：直接覆盖本体（运行的其实是解包副本），再重启
-      fs.copyFile(filePath, appImage, function (e) {
-        if (!e) {
-          fs.chmod(appImage, 0o755, function () {
-            relaunchAppImage(appImage);
-            resolve({ ok: true, message: "新版本已就位，正在重启应用" });
-          });
-          return;
-        }
-        // 无写权限：走 pkexec（必须 detached，否则我们退出后授权框会被一起带走）
-        const child = spawn("pkexec", ["cp", "-f", filePath, appImage], { detached: true, stdio: "ignore" });
-        child.on("error", function () {
-          try { shell.openPath(filePath); } catch (x) {}
-          resolve({ ok: false, error: "无权限替换 AppImage", message: "已为你打开新版本安装包，请手动替换后重启" });
-        });
-        child.on("spawn", function () {
-          child.unref();
-          resolve({ ok: true, message: "已请求管理员授权，替换完成后请手动重启应用" });
-        });
+      // AppImage：等我们退出后再覆盖本体（运行中的文件正在被 mmap，边跑边覆盖有风险），
+      // 覆盖成功后自动启动新版本；没有写权限时退回 pkexec（必须 detached）。
+      const cmd = "cp -f " + shellQuote(filePath) + " " + shellQuote(appImage)
+        + " && chmod 755 " + shellQuote(appImage)
+        + " && (" + shellQuote(appImage) + " >/dev/null 2>&1 &)";
+      try {
+        spawnAfterExitPosix(cmd).unref();
+        resolve({ ok: true, message: "应用即将退出，新版本会自动覆盖并启动" });
+        return;
+      } catch (e) { /* 退回 pkexec */ }
+      const child = spawn("pkexec",
+        ["/bin/sh", "-c", "cp -f " + shellQuote(filePath) + " " + shellQuote(appImage) + " && chmod 755 " + shellQuote(appImage)],
+        { detached: true, stdio: "ignore" });
+      child.on("error", function () {
+        try { shell.openPath(filePath); } catch (x) {}
+        resolve({ ok: false, error: "无权限替换 AppImage", message: "已为你打开新版本安装包，请手动替换后重启" });
+      });
+      child.on("spawn", function () {
+        child.unref();
+        resolve({ ok: true, message: "已请求管理员授权，替换完成后请手动重启应用" });
       });
       return;
     }
     // deb / rpm：交给系统包管理器。pkexec 会弹授权框 —— 必须 detached，
     // 否则应用一退出，授权框/安装进程会被一起终止（这正是"什么都没发生"的原因之一）。
     const args = /\.deb$/i.test(name) ? ["dpkg", "-i", filePath] : ["rpm", "-i", filePath];
-    const child = spawn("pkexec", args, { detached: true, stdio: "ignore" });
+    // 等我们退出后再装；pkexec 必须 detached，否则应用一退出就把授权框带走了
+    const child = spawn("pkexec",
+      ["/bin/sh", "-c", "while kill -0 " + process.pid + " 2>/dev/null; do sleep 0.2; done; exec \"$@\"", "sh"].concat(args),
+      { detached: true, stdio: "ignore" });
     child.on("error", function () {
       // 没有 pkexec（或策略拒绝）→ 交给系统"软件安装器"打开安装包
       try { shell.openPath(filePath); } catch (x) {}
@@ -500,7 +525,7 @@ async function downloadAndInstall(opts) {
   const ir = await startInstall(asset.name, tmp);
   if (ir && ir.ok) {
     onStatus({ phase: "install", message: (ir.message || "安装程序已启动") + "；应用即将退出…" });
-    quitSoon(1800); // 给安装器一点时间起来，再退出让出文件占用
+    quitSoon(800); // 快速退出：安装动作由"盯 PID 的游离进程"在我们消失后接力
   } else {
     // 关键：自动安装没起来就别退出应用，把安装包位置与下载页出口交给界面
     onStatus({
