@@ -32,6 +32,11 @@
   var NAME = isElectron ? "electron" : (isCapacitor ? "capacitor" : "browser");
 
   /* ---------- Capacitor 插件取用（拿不到就返回 null，调用方自行兜底）---------- */
+  /* 生物识别插件的注册名各版本不同（@aparajita 的是 BiometricAuthNative），统一取用 */
+  function bioPlugin() {
+    return plug("BiometricAuthNative") || plug("BiometricAuth") || null;
+  }
+
   function plug(name) {
     try {
       if (cap && cap.Plugins && cap.Plugins[name]) return cap.Plugins[name];
@@ -85,6 +90,27 @@
       return Promise.resolve({ ok: false, error: String((e && e.message) || e) });
     }
   }
+
+  /* ---------- 生物识别辅助（浏览器 WebAuthn 用）---------- */
+  function hasWebAuthn() {
+    try {
+      return !!(w.PublicKeyCredential && w.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable && w.navigator && w.navigator.credentials);
+    } catch (e) { return false; }
+  }
+  function b64url(buf) {
+    var bytes = new Uint8Array(buf), str = "";
+    for (var i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+    return w.btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function unb64url(str) {
+    var s2 = String(str).replace(/-/g, "+").replace(/_/g, "/");
+    while (s2.length % 4) s2 += "=";
+    var raw = w.atob(s2), arr = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+    return arr;
+  }
+  var CRED_KEY = "simplenote_zh_lock_cred"; // 浏览器端 WebAuthn 凭证 id（仅本机）
+  function credStore() { try { return w.localStorage || null; } catch (e) { return null; } }
 
   /* ---------- 画布等比压缩（移动端插图用；桌面端由主进程原生压缩）---------- */
   function resizeDataUrl(dataUrl, max) {
@@ -239,6 +265,9 @@
       update: true,
       revealFile: NAME === "electron",
       webdav: NAME === "electron",
+      // 生物识别：桌面(macOS Touch ID) / 移动(Face ID·指纹) / 浏览器(WebAuthn 平台认证器)。
+      // 具体是否可用请再调 EZPlatform.biometric.isAvailable()（异步、与设备有关）。
+      biometric: (NAME !== "browser") || hasWebAuthn(),
     },
 
     /* 选图：桌面弹系统对话框（含内嵌/引用两种模式）；移动端拍照/相册并自动压缩；浏览器不支持 */
@@ -309,6 +338,95 @@
         }
       }
       return webSaveTextFile(opts);
+    },
+
+    /* 生物识别（刷脸 / 指纹）：统一的"是否可用 + 注册 + 验证"三件事。
+     * · electron：macOS 走系统 Touch ID（主进程 systemPreferences.promptTouchID）
+     * · capacitor：@aparajita/capacitor-biometric-auth（iOS Face ID / Android 指纹）
+     * · browser：WebAuthn 平台认证器（Mac 上是 Touch ID、Windows 上是 Windows Hello）
+     * 注意：这里只负责"系统认不认识你"，具体要不要用它解锁，由 shared/lock.js 决定。 */
+    biometric: {
+      label: function () {
+        if (NAME === "electron") return "Touch ID";
+        return "面容 / 指纹";
+      },
+      isAvailable: function () {
+        if (NAME === "electron") {
+          if (!w.electronAPI || !w.electronAPI.biometricAvailable) return Promise.resolve(false);
+          return Promise.resolve(w.electronAPI.biometricAvailable()).catch(function () { return false; });
+        }
+        if (NAME === "capacitor") {
+          var b = bioPlugin();
+          if (!b || !b.checkBiometry) return Promise.resolve(false);
+          return Promise.resolve(b.checkBiometry())
+            .then(function (r) { return !!(r && r.isAvailable); })
+            .catch(function () { return false; });
+        }
+        if (!hasWebAuthn()) return Promise.resolve(false);
+        try {
+          return Promise.resolve(w.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())
+            .catch(function () { return false; });
+        } catch (e) { return Promise.resolve(false); }
+      },
+      // 桌面/移动由系统弹窗，无需注册；浏览器需要先建一个本机凭证（返回凭证 id 或 null）
+      enroll: function () {
+        if (NAME !== "browser") return Promise.resolve(true);
+        if (!hasWebAuthn()) return Promise.resolve(null);
+        try {
+          var ch = new Uint8Array(32); w.crypto.getRandomValues(ch);
+          var uid = new Uint8Array(16); w.crypto.getRandomValues(uid);
+          return Promise.resolve(w.navigator.credentials.create({
+            publicKey: {
+              challenge: ch,
+              rp: { name: "简易笔记" },
+              user: { id: uid, name: "easynote", displayName: "简易笔记" },
+              pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+              authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required", residentKey: "preferred" },
+              timeout: 60000,
+              attestation: "none",
+            },
+          })).then(function (cred) { return (cred && cred.rawId) ? b64url(cred.rawId) : null; })
+            .catch(function () { return null; });
+        } catch (e) { return Promise.resolve(null); }
+      },
+      verify: function (reason) {
+        if (NAME === "electron") {
+          if (!w.electronAPI || !w.electronAPI.biometricVerify) return Promise.resolve(false);
+          return Promise.resolve(w.electronAPI.biometricVerify(reason || "解锁简易笔记"))
+            .then(function (ok) { return !!ok; }).catch(function () { return false; });
+        }
+        if (NAME === "capacitor") {
+          var b = bioPlugin();
+          if (!b || !b.authenticate) return Promise.resolve(false);
+          return Promise.resolve(b.authenticate({
+            reason: reason || "解锁简易笔记",
+            cancelTitle: "取消",
+            allowDeviceCredentials: false,
+          })).then(function () { return true; }).catch(function () { return false; });
+        }
+        var cs = credStore();
+        var id = cs && cs.getItem(CRED_KEY);
+        if (!id || !hasWebAuthn()) return Promise.resolve(false);
+        try {
+          var ch2 = new Uint8Array(32); w.crypto.getRandomValues(ch2);
+          return Promise.resolve(w.navigator.credentials.get({
+            publicKey: {
+              challenge: ch2,
+              allowCredentials: [{ type: "public-key", id: unb64url(id) }],
+              userVerification: "required",
+              timeout: 60000,
+            },
+          })).then(function (a) { return !!a; }).catch(function () { return false; });
+        } catch (e) { return Promise.resolve(false); }
+      },
+      saveCredential: function (id) {
+        var cs = credStore();
+        try { if (cs && id) cs.setItem(CRED_KEY, id); } catch (e) {}
+      },
+      clearCredential: function () {
+        var cs = credStore();
+        try { if (cs) cs.removeItem(CRED_KEY); } catch (e) {}
+      },
     },
 
     /* 检查最新版本：桌面走主进程（含托盘/通知等完整流程）；移动端看 mobile-v* 标签；网页版看 v* 标签 */

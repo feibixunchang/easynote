@@ -1,5 +1,5 @@
 /* ============ Electron 主进程 ============ */
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme, clipboard, protocol, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, dialog, shell, Notification, nativeTheme, clipboard, protocol, screen, systemPreferences } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { execFile } = require("child_process");
@@ -915,6 +915,27 @@ ipcMain.handle("start-update", function (_e, version) {
 });
 
 // 在文件管理器里定位"已下载好的安装包"（自动安装没起来时的手动出口）
+/* 生物识别（macOS Touch ID）：系统原生接口，不把指纹/面容数据交给应用 ——
+ * 应用只拿到"通过 / 未通过"的结果。Windows/Linux 上 Electron 无对应 API，返回不可用，
+ * 界面会自动隐藏生物识别选项并回落到数字密码。 */
+ipcMain.handle("biometric-available", function () {
+  try {
+    return process.platform === "darwin" &&
+      typeof systemPreferences.canPromptTouchID === "function" &&
+      systemPreferences.canPromptTouchID();
+  } catch (e) { return false; }
+});
+ipcMain.handle("biometric-verify", async function (_e, reason) {
+  try {
+    if (process.platform !== "darwin") return false;
+    if (typeof systemPreferences.promptTouchID !== "function") return false;
+    await systemPreferences.promptTouchID(String(reason || "解锁简易笔记"));
+    return true;
+  } catch (e) {
+    return false; // 用户取消 / 识别失败 / 不支持 —— 都回落到数字密码
+  }
+});
+
 ipcMain.handle("reveal-file", function (_e, p) {
   try {
     if (typeof p === "string" && p) shell.showItemInFolder(p);

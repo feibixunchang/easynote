@@ -187,6 +187,75 @@ function loadWith(win) {
   }
 
 
+  console.log("\n【6】生物识别：三端适配（桌面 Touch ID / 移动 Face ID / 浏览器 WebAuthn）");
+  {
+    // 桌面：走主进程 IPC
+    const calls = [];
+    const winE = {
+      navigator: { userAgent: "Electron/31" },
+      electronAPI: {
+        openExternal() {},
+        biometricAvailable: () => true,
+        biometricVerify: (r) => { calls.push("touchid:" + r); return Promise.resolve(true); },
+      },
+      console: console,
+    };
+    const EZe = loadWith(winE);
+    ok("桌面：可用性来自主进程", (await EZe.biometric.isAvailable()) === true);
+    ok("桌面：标签为 Touch ID", EZe.biometric.label() === "Touch ID");
+    ok("桌面：验证走系统 promptTouchID",
+      (await EZe.biometric.verify("解锁")) === true && calls.indexOf("touchid:解锁") !== -1);
+    ok("桌面：capabilities.biometric 为真", EZe.capabilities.biometric === true);
+
+    // 移动：Capacitor 插件（注册名 BiometricAuthNative）
+    const c2 = [];
+    const EZc = loadWith({
+      navigator: { userAgent: "iPhone" },
+      Capacitor: { isNativePlatform: () => true, getPlatform: () => "ios", Plugins: {
+        BiometricAuthNative: {
+          checkBiometry: () => { c2.push("check"); return Promise.resolve({ isAvailable: true, biometryType: "faceId" }); },
+          authenticate: (o) => { c2.push("auth:" + o.reason); return Promise.resolve(); },
+        },
+      } },
+      console: console,
+    });
+    ok("移动：可用性来自插件 checkBiometry", (await EZc.biometric.isAvailable()) === true && c2.indexOf("check") !== -1);
+    ok("移动：验证走插件 authenticate",
+      (await EZc.biometric.verify("解锁简易笔记")) === true && c2.indexOf("auth:解锁简易笔记") !== -1);
+    ok("移动：没有插件时优雅返回 false",
+      (await loadWith({ navigator: { userAgent: "iPhone" }, Capacitor: { isNativePlatform: () => true, Plugins: {} }, console: console })
+        .biometric.isAvailable()) === false);
+    ok("移动：用户取消（reject）→ false 不抛异常",
+      (await loadWith({ navigator: { userAgent: "iPhone" }, console: console,
+        Capacitor: { isNativePlatform: () => true, Plugins: { BiometricAuthNative: { authenticate: () => Promise.reject(new Error("cancel")) } } } })
+        .biometric.verify("x")) === false);
+
+    // 浏览器：WebAuthn 平台认证器
+    const c3 = [];
+    const winB = {
+      setTimeout: setTimeout, clearTimeout: clearTimeout, console: console,
+      navigator: { credentials: {
+        create: () => { c3.push("create"); return Promise.resolve({ rawId: new Uint8Array([1, 2, 3]).buffer }); },
+        get: () => { c3.push("get"); return Promise.resolve({ id: "x" }); },
+      } },
+      PublicKeyCredential: { isUserVerifyingPlatformAuthenticatorAvailable: () => Promise.resolve(true) },
+      crypto: { getRandomValues: (a) => { for (let i = 0; i < a.length; i++) a[i] = i; return a; } },
+      localStorage: (() => { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, removeItem: (k) => { delete m[k]; } }; })(),
+      btoa: (s) => Buffer.from(s, "binary").toString("base64"),
+      atob: (s) => Buffer.from(s, "base64").toString("binary"),
+    };
+    const EZb = loadWith(winB);
+    ok("浏览器：WebAuthn 平台认证器可用", (await EZb.biometric.isAvailable()) === true);
+    const cred = await EZb.biometric.enroll();
+    ok("浏览器：注册返回凭证 id", typeof cred === "string" && cred.length > 0, String(cred));
+    EZb.biometric.saveCredential(cred);
+    ok("浏览器：验证走凭证 get()", (await EZb.biometric.verify("解锁")) === true && c3.indexOf("get") !== -1);
+    ok("浏览器：没有可用凭证时返回 false", (await loadWith({ console: console, navigator: { credentials: { get: () => Promise.resolve(null) } },
+      PublicKeyCredential: { isUserVerifyingPlatformAuthenticatorAvailable: () => Promise.resolve(true) },
+      crypto: { getRandomValues: (a) => a }, localStorage: winB.localStorage, btoa: winB.btoa, atob: winB.atob }).biometric.verify("x")) === false);
+  }
+
+
   console.log("\n────────────────────────");
   console.log("通过 " + pass + " 项，失败 " + fail + " 项");
   process.exit(fail ? 1 : 0);

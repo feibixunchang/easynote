@@ -21,6 +21,11 @@
   var FAIL_LIMIT = 5;             // 连续输错次数上限
   var LOCK_MS = 30 * 1000;        // 超限后锁定 30 秒（重启应用即重置）
 
+  // 平台层访问器：统一从 root 取（浏览器里 root===window，但测试/嵌入式环境下两者可能不同）
+  function plat() {
+    try { return root.EZPlatform || null; } catch (e) { return null; }
+  }
+
   function store() {
     try { return root.localStorage || null; } catch (e) { return null; }
   }
@@ -73,6 +78,64 @@
       var r = read();
       return !!(r && r.d === digest(pin));
     },
+    /* ---- 生物识别（刷脸 / 指纹）：只是"另一种解锁方式"，数字密码始终保留作兜底 ---- */
+    isBiometricEnabled: function () { var r = read(); return !!(r && r.b === true); },
+    biometricLabel: function () {
+      try {
+        return (plat() && plat().biometric && plat().biometric.label()) || "面容 / 指纹";
+      } catch (e) { return "面容 / 指纹"; }
+    },
+    setBiometric: function (on) {
+      var r = read();
+      if (!r) return false; // 必须先有数字密码
+      r.b = !!on;
+      write(r);
+      return true;
+    },
+    // 设备是否支持（异步，与硬件/系统设置有关）
+    areBiometricsSupported: function () {
+      try {
+        if (!plat() || !plat().biometric) return Promise.resolve(false);
+        return Promise.resolve(plat().biometric.isAvailable()).catch(function () { return false; });
+      } catch (e) { return Promise.resolve(false); }
+    },
+    // 打开生物识别：可用的前提下，浏览器还需要先"注册"一个本机凭证
+    enableBiometric: function () {
+      if (!api.isEnabled()) return Promise.resolve({ ok: false, error: "请先设置数字密码" });
+      return api.areBiometricsSupported().then(function (ok) {
+        if (!ok) return { ok: false, error: "此设备不支持面容 / 指纹" };
+        var enroll = (plat() && plat().biometric && plat().biometric.enroll)
+          ? plat().biometric.enroll() : Promise.resolve(true);
+        return Promise.resolve(enroll).then(function (cred) {
+          if (cred === null) return { ok: false, error: "注册失败或已取消" };
+          if (typeof cred === "string" && plat().biometric.saveCredential) plat().biometric.saveCredential(cred);
+          api.setBiometric(true);
+          return { ok: true };
+        });
+      }).catch(function (e) { return { ok: false, error: String((e && e.message) || e) }; });
+    },
+    disableBiometric: function () {
+      api.setBiometric(false);
+      try {
+        if (plat() && plat().biometric && plat().biometric.clearCredential) {
+          plat().biometric.clearCredential();
+        }
+      } catch (e) {}
+    },
+    // 用生物识别解锁：成功 → 走与"密码正确"相同的成功路径；失败 → **不计入密码错误次数**
+    tryBiometric: function (reason) {
+      if (!api.isEnabled() || !api.isBiometricEnabled()) return Promise.resolve(false);
+      var st = api.lockState();
+      if (st.locked) return Promise.resolve(false);
+      var verify = (plat() && plat().biometric && plat().biometric.verify)
+        ? plat().biometric.verify(reason || "解锁简易笔记") : Promise.resolve(false);
+      return Promise.resolve(verify).then(function (ok) {
+        if (ok) { succeed(); return true; }
+        setMsg("生物识别未通过，请用数字密码解锁");
+        return false;
+      }).catch(function () { return false; });
+    },
+
     // 输错/锁定状态（纯函数式读取，便于测试）
     lockState: function (now) {
       now = now || Date.now();
@@ -102,6 +165,7 @@
   var onUnlockedCb = null;
   var onDoneCb = null;
   var tickTimer = null;
+  var autoBioTimer = null;
 
   function injectStyle() {
     if (root.document.getElementById("ezlock-style")) return;
@@ -125,6 +189,8 @@
       "#ezlock .lk-shake{animation:ezlock-shake .3s}",
       "@keyframes ezlock-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}",
       "#ezlock .lk-forgot{margin-top:18px;font-size:12px;color:#4189e6;cursor:pointer;text-decoration:underline}",
+      "#ezlock .lk-bio{margin:0 0 14px;padding:9px 16px;border-radius:20px;border:1px solid #4189e6;background:transparent;",
+      "color:#4189e6;font-size:13px;cursor:pointer;-webkit-tap-highlight-color:transparent}",
     ].join("");
     var st = root.document.createElement("style");
     st.id = "ezlock-style";
@@ -142,6 +208,7 @@
       '<div class="lk-sub" id="lkSub">4~6 位数字密码 · 仅本机校验，不加密数据</div>' +
       '<div class="lk-dots" id="lkDots"></div>' +
       '<div class="lk-msg" id="lkMsg"></div>' +
+      '<button type="button" class="lk-bio" id="lkBio" hidden></button>' +
       '<div class="lk-pad" id="lkPad"></div>' +
       '<div class="lk-forgot" id="lkForgot">忘记密码？</div>';
     root.document.body.appendChild(wrap);
@@ -157,6 +224,9 @@
       pad.appendChild(b);
     });
     wrap.querySelector("#lkForgot").addEventListener("click", forgot);
+    wrap.querySelector("#lkBio").addEventListener("click", function () {
+      api.tryBiometric().catch(function () {});
+    });
     el = {
       wrap: wrap,
       title: wrap.querySelector("#lkTitle"),
@@ -164,6 +234,7 @@
       dots: wrap.querySelector("#lkDots"),
       msg: wrap.querySelector("#lkMsg"),
       forgot: wrap.querySelector("#lkForgot"),
+      bio: wrap.querySelector("#lkBio"),
     };
     return el;
   }
@@ -206,6 +277,7 @@
 
   function show() {
     build();
+    var autoBio = (mode === "unlock") && api.isBiometricEnabled();
     var dark = false;
     try {
       dark = /(^|\s)dark(\s|$)/.test(root.document.body.className) ||
@@ -216,8 +288,14 @@
     renderDots();
     setMsg("");
     startCountdown();
+    if (autoBio) {
+      // 稍等一下再弹，避免刚切到锁屏就打断用户的手势
+      clearTimeout(autoBioTimer);
+      autoBioTimer = setTimeout(function () { api.tryBiometric().catch(function () {}); }, 350);
+    }
   }
   function hide() {
+    clearTimeout(autoBioTimer);
     clearTick();
     if (el) el.wrap.style.display = "none";
   }
@@ -233,6 +311,13 @@
       el.title.textContent = "输入密码解锁";
       el.sub.textContent = api.MIN_LEN + "~" + api.MAX_LEN + " 位数字密码 · 仅本机校验，不加密数据";
       el.forgot.style.display = "block";
+      // 生物识别：已开启才显示按钮，并在进入锁屏时自动弹一次（失败不影响密码尝试）
+      var bioOn = api.isBiometricEnabled();
+      el.bio.hidden = !bioOn;
+      if (bioOn) {
+        var lb = api.biometricLabel();
+        el.bio.textContent = "👆 用 " + lb + " 解锁";
+      }
     } else if (m === "setup-new") {
       el.title.textContent = "设置密码";
       el.sub.textContent = "请输入 " + api.MIN_LEN + "~" + api.MAX_LEN + " 位数字";
@@ -270,14 +355,7 @@
 
   function submit() {
     if (mode === "unlock") {
-      if (api.verify(input)) {
-        input = "";
-        hide();
-        var cb = onUnlockedCb;
-        onUnlockedCb = null;
-        if (cb) cb();
-        return;
-      }
+      if (api.verify(input)) { succeed(); return; }
       var st = api.registerFail();
       input = "";
       renderDots();
@@ -304,6 +382,17 @@
     var done = onDoneCb;
     onDoneCb = null;
     if (done) done(true);
+  }
+
+  // 解锁成功（数字密码或生物识别共用）：清掉失败计数并回调
+  function succeed() {
+    failCount = 0;
+    lockedUntil = 0;
+    input = "";
+    hide();
+    var cb = onUnlockedCb;
+    onUnlockedCb = null;
+    if (cb) cb();
   }
 
   function forgot() {

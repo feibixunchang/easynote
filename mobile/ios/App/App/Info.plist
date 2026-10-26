@@ -29,6 +29,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSFaceIDUsageDescription</key>
+	<string>用于「面容解锁」：用 Face ID 快速打开简易笔记（也可改用数字密码）。</string>
 	<key>NSCameraUsageDescription</key>
 	<string>需要使用相机拍摄照片并插入到笔记中</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

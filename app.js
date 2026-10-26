@@ -1493,6 +1493,19 @@
       if (setup) setup.textContent = on ? "修改密码" : "设置密码";
       if (now) now.hidden = !on;
       if (off) off.hidden = !on;
+      // 生物识别：需要"已设密码 + 此设备支持"才显示（是否支持要异步问系统）
+      var bio = document.getElementById("btnBioToggle");
+      if (bio) {
+        if (!on) { bio.hidden = true; }
+        else {
+          EZLock.areBiometricsSupported().then(function (supported) {
+            if (!supported) { bio.hidden = true; return; }
+            var lb = EZLock.biometricLabel();
+            bio.hidden = false;
+            bio.textContent = EZLock.isBiometricEnabled() ? ("关闭 " + lb + " 解锁") : ("开启 " + lb + " 解锁");
+          }).catch(function () { bio.hidden = true; });
+        }
+      }
     }
     var lockSetupBtn = document.getElementById("btnLockSetup");
     if (lockSetupBtn) {
@@ -1515,6 +1528,23 @@
           refreshLockUI();
           toast("已关闭密码解锁");
         }
+      });
+    }
+    var bioToggleBtn = document.getElementById("btnBioToggle");
+    if (bioToggleBtn) {
+      bioToggleBtn.addEventListener("click", function () {
+        if (!EZLock.isEnabled()) { toast("请先设置数字密码"); return; }
+        var lb = EZLock.biometricLabel();
+        if (EZLock.isBiometricEnabled()) {
+          EZLock.disableBiometric();
+          refreshLockUI();
+          toast("已关闭 " + lb + " 解锁");
+          return;
+        }
+        EZLock.enableBiometric().then(function (r) {
+          if (r && r.ok) { refreshLockUI(); toast("已开启 " + lb + " 解锁，下次打开可直接刷脸/指纹"); }
+          else toast((r && r.error) || "开启失败");
+        }).catch(function () { toast("开启失败"); });
       });
     }
     refreshLockUI();

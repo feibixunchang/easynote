@@ -143,8 +143,83 @@ console.log("\n【5】设置密码两步流程（回归：1.2.33 曾恒报「两
     ["1", "2", "3", "4", "5", "6"].forEach((k) => EZ3._test.key(k));
     EZ3._test.key("fn-ok");
     ok("6 位密码两次一致也能保存", doneOk3 === true && EZ3.verify("123456") === true, String(doneOk3));
-    console.log("\n────────────────────────");
-    console.log("通过 " + pass + " 项，失败 " + fail + " 项");
-    process.exit(fail ? 1 : 0);
+    (async function () {
+
+console.log("\n【6】生物识别（面容 / 指纹）");
+{
+  const st = memStorage();
+  let bioOk = false, enrollCalled = 0, credSaved = null;
+  const win = {
+    localStorage: st,
+    confirm: () => true,
+    EZPlatform: {
+      biometric: {
+        label: () => "面容 / 指纹",
+        isAvailable: () => Promise.resolve(true),
+        enroll: () => { enrollCalled++; return Promise.resolve("cred-id-1"); },
+        saveCredential: (id) => { credSaved = id; },
+        clearCredential: () => { credSaved = null; },
+        verify: () => Promise.resolve(bioOk),
+      },
+    },
+    // 复用与 loadWith 相同的极简 DOM 桩（保证 build()/renderDots() 能跑通）
+    document: (() => {
+      const node = () => ({
+        style: {}, className: "", textContent: "", innerHTML: "", type: "", id: "",
+        classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+        appendChild(c) { return c; }, removeChild() {}, remove() {}, setAttribute() {}, addEventListener() {},
+        querySelector: () => node(), hidden: false,
+      });
+      return { head: node(), body: node(), documentElement: node(), createElement: () => node(), getElementById: () => null, execCommand: () => true };
+    })(),
+    setTimeout: setTimeout, clearTimeout: clearTimeout, setInterval: setInterval, clearInterval: clearInterval,
+  };
+  delete require.cache[require.resolve(LOCK)];
+  global.window = win;
+  require(LOCK);
+  const EZ = global.window.EZLock;
+
+  ok("未设密码时不能开生物识别", EZ.isBiometricEnabled() === false);
+  ok("没有密码时 enableBiometric 被拒", (await EZ.enableBiometric()).ok === false);
+
+  EZ.setPin("1234");
+  const en = await EZ.enableBiometric();
+  ok("开启生物识别：走了注册流程并保存凭证", en.ok === true && enrollCalled === 1 && credSaved === "cred-id-1", JSON.stringify(en));
+  ok("开启后状态为已启用", EZ.isBiometricEnabled() === true);
+  ok("重启（重新加载）后仍记得已启用", (function () {
+    delete require.cache[require.resolve(LOCK)];
+    require(LOCK);
+    return global.window.EZLock.isBiometricEnabled() === true;
+  })());
+  ok("标签来自平台层", global.window.EZLock.biometricLabel() === "面容 / 指纹");
+
+  // 识别失败：不计入"密码输错次数"（不能因为刷脸失败而锁定用户）
+  const EZ2 = global.window.EZLock;
+  bioOk = false;
+  const bad = await EZ2.tryBiometric();
+  const stAfterFail = EZ2.lockState();
+  ok("识别失败返回 false", bad === false);
+  ok("识别失败不计入密码错误次数", stAfterFail.fails === 0 && stAfterFail.locked === false, JSON.stringify(stAfterFail));
+
+  // 识别成功：应直接解锁（触发 requireUnlock 的回调）
+  let unlocked = false;
+  EZ2.requireUnlock(function () { unlocked = true; });   // 已启用密码 → 注册回调
+  bioOk = true;
+  const good = await EZ2.tryBiometric();
+  ok("识别成功返回 true", good === true);
+  ok("识别成功后回调被触发（进入应用）", unlocked === true);
+
+  // 关闭生物识别 → 清掉浏览器凭证
+  EZ2.disableBiometric();
+  ok("关闭后状态为未启用", EZ2.isBiometricEnabled() === false);
+  ok("关闭时清掉了本机凭证", credSaved === null);
+  ok("数字密码依然有效（兜底始终保留）", EZ2.verify("1234") === true);
+}
+
+
+      console.log("\n────────────────────────");
+      console.log("通过 " + pass + " 项，失败 " + fail + " 项");
+      process.exit(fail ? 1 : 0);
+    })();
   }, 200);
 }

@@ -58,6 +58,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
       cb(info);
     });
   },
+  // 生物识别：是否可用 + 弹系统验证（macOS Touch ID）
+  biometricAvailable: function () {
+    return ipcRenderer.invoke("biometric-available");
+  },
+  biometricVerify: function (reason) {
+    return ipcRenderer.invoke("biometric-verify", reason);
+  },
   revealFile: function (p) {
     return ipcRenderer.invoke("reveal-file", p);
   },
