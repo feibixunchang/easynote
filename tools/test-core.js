@@ -72,6 +72,26 @@ ok("桌面端 file:// 改写生效",
   md("![图](file:///tmp/a.png)"));
 ok("http 图片不受影响", md("![图](https://x/y.png)").indexOf('src="https://x/y.png"') !== -1);
 
+console.log("\n【6】noteTitle / noteSnippet / searchText（插图笔记的标题 / 摘要 / 搜索）");
+ok("普通笔记标题", EZ.noteTitle("会议纪要\n明天 10 点") === "会议纪要");
+ok("Markdown 标题去掉 #", EZ.noteTitle("# 标题") === "标题");
+ok("首行是图片 → 跳过，用下一行文字当标题",
+  EZ.noteTitle("![图](data:image/png;base64,AAAA)\n真正的标题") === "真正的标题",
+  EZ.noteTitle("![图](data:image/png;base64,AAAA)\n真正的标题"));
+ok("全篇只有图片 → 友好标题（用图片名）",
+  EZ.noteTitle("![风景](data:image/png;base64,AAAA)") === "🖼 风景",
+  EZ.noteTitle("![风景](data:image/png;base64,AAAA)"));
+ok("标题里绝不出现 base64",
+  EZ.noteTitle("![图](data:image/png;base64,AAAA)").indexOf("base64") === -1);
+ok("空笔记 → 无标题", EZ.noteTitle("") === "无标题");
+ok("摘要跳过标题行", EZ.noteSnippet("标题\n正文内容") === "正文内容");
+ok("摘要把图片写成 [图片]", EZ.noteSnippet("标题\n![图](data:image/png;base64,AAAA)").indexOf("[图片]") !== -1);
+ok("searchText 去掉 base64 体积部分",
+  EZ.searchText("![风景](data:image/png;base64,AAAA)").indexOf("base64") === -1);
+ok("searchText 保留图片名（仍可搜到）",
+  EZ.searchText("![风景](data:image/png;base64,AAAA)").indexOf("风景") !== -1);
+
+
 console.log("\n────────────────────────");
 console.log("通过 " + pass + " 项，失败 " + fail + " 项");
 process.exit(fail ? 1 : 0);

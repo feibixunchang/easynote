@@ -125,7 +125,62 @@
     return out.join("\n");
   }
 
+
+  /* ---------- 列表标题 / 摘要 / 搜索文本（纯逻辑，三端共用）----------
+   * 为什么放在这里：插图后笔记的第一行是 ![名字](data:...) ——
+   * 若直接把它当标题，列表里会显示一整串 base64，既难看又影响搜索/导出文件名。
+   */
+  // 行内 Markdown 剥离：图片整体去掉，链接只留文字，粗体/代码/引用/标题符号去掉
+  function stripInlineMd(s) {
+    return String(s)
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/[*`>]/g, "")
+      .replace(/^#+\s*/, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  // 列表标题：跳过"纯图片"行；全篇只有图片时给出友好标题（而不是 base64）
+  function noteTitle(content) {
+    var text = String(content || "");
+    var lines = text.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var t = stripInlineMd(lines[i]);
+      if (t) return t;
+    }
+    var imgs = text.match(/!\[[^\]]*\]\([^)]*\)/g);
+    if (imgs && imgs.length) {
+      var alt = (text.match(/!\[([^\]]*)\]/) || [])[1] || "";
+      return alt ? "🖼 " + alt : "🖼 图片笔记";
+    }
+    return "无标题";
+  }
+  // 列表摘要：图片替换为 [图片]、链接只留文字；取"标题行之后"的第一段文字，限长 120
+  function noteSnippet(content) {
+    var raw = String(content || "")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, " [图片] ")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    var lines = raw.split("\n");
+    var skipped = false;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].trim()) {
+        if (!skipped) { skipped = true; continue; }
+        var s = lines[i].trim();
+        return s.length > 120 ? s.slice(0, 120) + "…" : s;
+      }
+    }
+    return "";
+  }
+  // 搜索用文本：把内嵌图片的 data: 体积部分去掉、保留图片名，
+  // 避免搜 "data" 命中所有图片笔记，同时仍然能按图片名搜到。
+  function searchText(content) {
+    return String(content || "").replace(/!\[([^\]]*)\]\(data:[^)]*\)/g, "$1 [图片] ");
+  }
+
   root.EZCore = {
+    noteTitle: noteTitle,
+    noteSnippet: noteSnippet,
+    searchText: searchText,
     isValidNoteId: isValidNoteId,
     escapeHtml: escapeHtml,
     escapeAttr: escapeAttr,

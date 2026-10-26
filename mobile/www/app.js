@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.14";
+  var APP_VERSION = "1.0.15";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -275,28 +275,14 @@
   function pad(n) {
     return n < 10 ? "0" + n : "" + n;
   }
+  // 列表标题：交给共享核心（跳过纯图片行，避免把 base64 当标题）
   function getTitle(note) {
-    var lines = (note.content || "").split("\n");
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].trim().length) return lines[i].trim();
-    }
-    return "无标题";
+    return EZCore.noteTitle(note && note.content);
   }
   // 摘要：剥离 Markdown 图片/链接语法（避免 data: 大图撑爆列表），限长 120 字
+  // 列表摘要：交给共享核心（图片→[图片]，链接留文字）
   function getSnippet(note) {
-    var raw = note.content || "";
-    raw = raw.replace(/!\[[^\]]*\]\([^)]*\)/g, " [图片] ");
-    raw = raw.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
-    var lines = raw.split("\n");
-    var skipped = false;
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].trim().length) {
-        if (!skipped) { skipped = true; continue; }
-        var s = lines[i].trim();
-        return s.length > 120 ? s.slice(0, 120) + "…" : s;
-      }
-    }
-    return "";
+    return EZCore.noteSnippet(note && note.content);
   }
   function extractTags(content) {
     var tags = {};
@@ -1584,11 +1570,24 @@
       return resizeDataUrl(photo.dataUrl, IMG_MAX);
     }).then(function (dataUrl) {
       if (!dataUrl) return;
-      var md = "\n![" + formatDateTime(new Date()) + "](" + dataUrl + ")\n";
-      insertAtCursor(el.editor, md);
-      triggerInput(el.editor);
-      if (!note.markdown) { note.markdown = true; save(); renderAll(); }
-      toast("已插入图片（已内嵌压缩，点 👁 预览查看）");
+      // 智能排版：图片单独占一行，光标落在图片下方，便于接着打字
+      var ta = el.editor;
+      var start = ta.selectionStart, end = ta.selectionEnd;
+      var before = ta.value.slice(0, start);
+      var md = (start > 0 && !/\n$/.test(before) ? "\n" : "") + "![" + formatDateTime(new Date()) + "](" + dataUrl + ")\n";
+      var caret = start + md.length;
+      ta.value = before + md + ta.value.slice(end);
+      triggerInput(ta);
+      if (!note.markdown) note.markdown = true;
+      state.preview = true; // 插图后直接打开预览，立刻能看到图
+      save();
+      renderAll();
+      try {
+        el.editor.focus();
+        var len = el.editor.value.length;
+        el.editor.selectionStart = el.editor.selectionEnd = Math.min(caret, len);
+      } catch (e) {}
+      toast("已插入图片（已内嵌压缩）");
     }).catch(function () {
       toast("插入图片失败或已取消");
     });

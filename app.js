@@ -353,28 +353,13 @@
   function pad(n) {
     return n < 10 ? "0" + n : "" + n;
   }
+  // 列表标题：交给共享核心（跳过纯图片行，避免把 base64 当标题）
   function getTitle(note) {
-    var lines = (note.content || "").split("\n");
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].trim().length) return lines[i].trim();
-    }
-    return "无标题";
+    return EZCore.noteTitle(note && note.content);
   }
+  // 列表摘要：交给共享核心（图片→[图片]，链接留文字）
   function getSnippet(note) {
-    var raw = note.content || "";
-    // 摘要里不显示 markdown 图片/链接语法：图片替换为 [图片]，链接只留文字
-    raw = raw.replace(/!\[[^\]]*\]\([^)]*\)/g, " [图片] ");
-    raw = raw.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
-    var lines = raw.split("\n");
-    var skipped = false;
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].trim().length) {
-        if (!skipped) { skipped = true; continue; }
-        var s = lines[i].trim();
-        return s.length > 120 ? s.slice(0, 120) + "…" : s;
-      }
-    }
-    return "";
+    return EZCore.noteSnippet(note && note.content);
   }
   function extractTags(content) {
     var tags = {};
@@ -514,7 +499,8 @@
     if (state.query) {
       var q = state.query.toLowerCase();
       list = list.filter(function (n) {
-        return (n.content || "").toLowerCase().indexOf(q) !== -1 ||
+        // 搜索前先去掉内嵌图片的 data: 体积部分，避免搜 "data" 命中所有图片笔记
+        return EZCore.searchText(n.content).toLowerCase().indexOf(q) !== -1 ||
           extractTags(n.content).some(function (t) { return t.indexOf(q) !== -1; });
       });
     }
@@ -2549,23 +2535,36 @@
     api.pickImage(mode).then(function (r) {
       if (!r) return;
       var name = r.name || "图片";
-      var md;
+      var url;
       if (mode === "path" && r.path) {
         // 引用模式：笔记里存 file:// 路径（体积小、通用），
         // 预览时由主进程经 easynote-file:// 自定义协议读取显示
-        md = "\n![" + name + "](" + fileUrl(r.path) + ")\n";
+        url = fileUrl(r.path);
       } else {
         if (!r.dataUrl) { toast("插入图片失败"); return; }
         // 内嵌模式：data URI 写进笔记，不受 file:// 跨目录限制，三端均可显示
-        md = "\n![" + name + "](" + r.dataUrl + ")\n";
+        url = r.dataUrl;
       }
-      insertAtCursor(el.editor, md);
-      triggerInput(el.editor);
-      // 图片需 Markdown + 预览才能显示：自动开启本笔记的 Markdown（启用 👁 预览按钮）
-      if (!note.markdown) { note.markdown = true; save(); setToolbar(note); }
-      toast(mode === "path"
-        ? "已插入图片（引用原文件），点 👁 预览查看"
-        : "已插入图片，点 👁 预览查看（图片已内嵌保存）");
+      // 智能排版：图片单独占一行 —— 前面不是行首才补换行；末尾补一个换行，
+      // 光标随之落在图片"下方"那一行的行首，「新建笔记 → 插图 → 直接打字」可自然接上。
+      var ta = el.editor;
+      var start = ta.selectionStart, end = ta.selectionEnd;
+      var before = ta.value.slice(0, start);
+      var md = (start > 0 && !/\n$/.test(before) ? "\n" : "") + "![" + name + "](" + url + ")\n";
+      var caret = start + md.length;
+      ta.value = before + md + ta.value.slice(end);
+      triggerInput(ta);
+      // 图片需要 Markdown + 预览才看得见：自动开启本笔记的 Markdown，
+      // 并直接打开「上下分栏」预览 —— 立刻看到图，同时下方输入框仍可继续打字。
+      if (!note.markdown) note.markdown = true;
+      state.preview = true;
+      save();
+      renderEditor();
+      try {
+        ta.focus();
+        ta.selectionStart = ta.selectionEnd = caret;
+      } catch (e) {}
+      toast(mode === "path" ? "已插入图片（引用原文件）" : "已插入图片（已内嵌保存）");
     }).catch(function () { toast("插入图片失败"); });
   }
 
