@@ -281,12 +281,21 @@
       if (NAME === "capacitor") {
         var cam = plug("Camera");
         if (!cam || !cam.getPhoto) return Promise.resolve(null);
+        // source 必须是 CameraSource 的枚举值（大写 CAMERA / PHOTOS / PROMPT）；
+        // 传小写会被忽略 → 插件退回它自己的英文弹层（Photo / From Photos / Take Picture）。
+        var src = String(opts.source || "photos").toLowerCase();
+        var cameraSource = src === "camera" ? "CAMERA" : (src === "photos" ? "PHOTOS" : "PROMPT");
         return cam.getPhoto({
           quality: 90,
           resultType: "dataUrl",
-          source: opts.source || "photos", // camera | photos
+          source: cameraSource,
           width: 2000,
           correctOrientation: true,
+          // 中文文案（插件自带弹层是英文默认值；即便走 Prompt 分支也保持中文）
+          promptLabelHeader: "插入图片",
+          promptLabelPhoto: "从相册选择",
+          promptLabelPicture: "拍照",
+          promptLabelCancel: "取消",
         }).then(function (photo) {
           if (!photo || !photo.dataUrl) return null;
           return resizeDataUrl(photo.dataUrl, opts.max || 1600);
@@ -417,7 +426,11 @@
           var b = bioPlugin();
           if (!b || !b.authenticate) return Promise.resolve(false);
           bioLastError = null;
-          return Promise.resolve(b.authenticate({
+          // 注意：@aparajita/capacitor-biometric-auth 的原生方法名是 internalAuthenticate。
+          // 我们是通过桥接代理取到的插件（没有 npm 包装类），调 authenticate() 会直接抛"未实现"，
+          // 表现就是"没有识别过程、直接未通过"。
+          var authFn = (typeof b.internalAuthenticate === "function") ? b.internalAuthenticate : b.authenticate;
+          return Promise.resolve(authFn.call(b, {
             reason: reason || "解锁简易笔记",
             cancelTitle: "取消",
             // 插件的选项名是 allowDeviceCredential（单数）；false = 只用生物识别，不退回设备密码。

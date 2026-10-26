@@ -177,7 +177,7 @@ function loadWith(win) {
     const EZ = loadWith(win);
     ok("移动端：支持选图", EZ.capabilities.pickImage === true);
     const img = await EZ.pickImage({ source: "camera" });
-    ok("选图 → Camera 插件（拍照来源正确）", calls.indexOf("camera:camera") !== -1);
+    ok("选图 → Camera 插件（source 用大写枚举 CAMERA）", calls.indexOf("camera:CAMERA") !== -1, JSON.stringify(calls.filter(function(c){return c.indexOf("camera:")===0;})));
     ok("选图返回内嵌 dataUrl 与文件名", !!(img && img.dataUrl && img.name), JSON.stringify(img && img.name));
     const r = await EZ.exportText({ defaultName: "b.json", content: "{}" });
     ok("导出 → 写缓存目录 + 拉起系统分享", calls.indexOf("fs:b.json") !== -1 && calls.some((c) => String(c).indexOf("share:") === 0), JSON.stringify(calls.slice(-2)));
@@ -253,6 +253,47 @@ function loadWith(win) {
     ok("浏览器：没有可用凭证时返回 false", (await loadWith({ console: console, navigator: { credentials: { get: () => Promise.resolve(null) } },
       PublicKeyCredential: { isUserVerifyingPlatformAuthenticatorAvailable: () => Promise.resolve(true) },
       crypto: { getRandomValues: (a) => a }, localStorage: winB.localStorage, btoa: winB.btoa, atob: winB.atob }).biometric.verify("x")) === false);
+  }
+
+
+  console.log("\n【7】回归：相机枚举值 / 弹层中文 / 生物识别原生方法名");
+  {
+    // 相机：source 必须是大写枚举，弹层文案必须中文（否则会跳出插件自带的英文弹层）
+    const cap = [];
+    const EZc = loadWith({
+      navigator: { userAgent: "iPhone" },
+      Capacitor: { isNativePlatform: () => true, getPlatform: () => "ios", Plugins: {
+        Camera: { getPhoto: (o) => { cap.push(o); return Promise.resolve({ dataUrl: "data:image/jpeg;base64,AA" }); } },
+      } },
+      console: console,
+    });
+    await EZc.pickImage({ source: "camera" });
+    await EZc.pickImage({ source: "photos" });
+    ok("拍照 → source=CAMERA（大写枚举）", cap[0] && cap[0].source === "CAMERA", JSON.stringify(cap[0] && cap[0].source));
+    ok("相册 → source=PHOTOS（大写枚举）", cap[1] && cap[1].source === "PHOTOS", JSON.stringify(cap[1] && cap[1].source));
+    ok("弹层文案已中文化", cap[0].promptLabelHeader === "插入图片" && cap[0].promptLabelPhoto === "从相册选择" &&
+      cap[0].promptLabelPicture === "拍照" && cap[0].promptLabelCancel === "取消",
+      JSON.stringify([cap[0].promptLabelHeader, cap[0].promptLabelPhoto, cap[0].promptLabelPicture]));
+
+    // 生物识别：桥接代理上的原生方法名是 internalAuthenticate（调 authenticate 会"未实现"）
+    const called = [];
+    const EZb2 = loadWith({
+      navigator: { userAgent: "iPhone" },
+      Capacitor: { isNativePlatform: () => true, getPlatform: () => "ios", Plugins: {
+        BiometricAuthNative: {
+          checkBiometry: () => Promise.resolve({ isAvailable: true, biometryType: "faceId" }),
+          internalAuthenticate: (o) => { called.push("internal:" + o.reason); return Promise.resolve(); },
+          authenticate: () => { called.push("wrong-method"); return Promise.reject(new Error("not implemented")); },
+        },
+      } },
+      console: console,
+    });
+    await EZb2.biometric.isAvailable();   // 应用里也是先查可用性（此时才知道是 Face ID 还是指纹）
+    const okBio = await EZb2.biometric.verify("解锁简易笔记");
+    ok("优先调用原生 internalAuthenticate（而不是 authenticate）",
+      okBio === true && called.indexOf("internal:解锁简易笔记") !== -1 && called.indexOf("wrong-method") === -1,
+      JSON.stringify(called));
+    ok("Face ID 标签识别正确", EZb2.biometric.label() === "面容 ID", EZb2.biometric.label());
   }
 
 

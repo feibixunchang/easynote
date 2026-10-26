@@ -345,8 +345,12 @@
       var bioOn = api.isBiometricEnabled();
       el.bio.hidden = !bioOn;
       if (bioOn) {
-        var lb = api.biometricLabel();
-        el.bio.textContent = "👆 用 " + lb + " 解锁";
+        el.bio.textContent = "👆 用 " + api.biometricLabel() + " 解锁";
+        // 顺手查一次可用性：查到具体类型（Face ID / 指纹）后把按钮文案更新得更准确
+        api.areBiometricsSupported().then(function (supported) {
+          if (!supported || mode !== "unlock") return;
+          try { el.bio.textContent = "👆 用 " + api.biometricLabel() + " 解锁"; } catch (e) {}
+        }).catch(function () {});
       }
     } else if (m === "setup-new") {
       el.title.textContent = "设置密码";
