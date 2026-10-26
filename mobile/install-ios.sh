@@ -80,6 +80,11 @@ sync_web() {
   return 0
 }
 
+# 共享核心产物：mobile/www/shared/core.js（index.html 会先引入它）
+if [ -x tools/build-shared.sh ]; then
+  bash tools/build-shared.sh >/dev/null 2>&1 || { say "✗ 共享核心同步失败（tools/build-shared.sh）"; exit 1; }
+fi
+
 if ! sync_web; then
   say "✗ 同步网页资源失败，请检查 $PUB 是否可写"
   exit 1

@@ -8,6 +8,18 @@
 (function () {
   "use strict";
 
+  /* ---- 共享核心 shared/core.js（纯函数单一来源，三端一致）----
+   * 这些工具函数不再各自复制一份，改一处即三端生效；
+   * tools/parity-check.sh 会在 CI 里校验三端引用是否齐全。 */
+  if (typeof EZCore === "undefined" || !EZCore) {
+    throw new Error("缺少共享核心 shared/core.js（各端 index.html 需在 app.js 之前引入它）");
+  }
+  var isValidNoteId = EZCore.isValidNoteId;
+  var escapeHtml = EZCore.escapeHtml;
+  var escapeAttr = EZCore.escapeAttr;
+  var inlineMd = EZCore.inlineMd;
+  var renderMarkdown = EZCore.renderMarkdown;
+
   /* ---------------- 存储键（与桌面端一致，同账号跨端互通） ---------------- */
   var STORE_KEY = "simplenote_zh_v1";
   var DARK_KEY = "simplenote_zh_dark";
@@ -263,11 +275,6 @@
   function pad(n) {
     return n < 10 ? "0" + n : "" + n;
   }
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
   function getTitle(note) {
     var lines = (note.content || "").split("\n");
     for (var i = 0; i < lines.length; i++) {
@@ -314,79 +321,6 @@
   }
 
   /* ---------------- Markdown（与桌面端一致） ---------------- */
-  function escapeAttr(s) {
-    return String(s)
-      .replace(/"/g, "%22")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
-  function inlineMd(s) {
-    return s
-      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_m, alt, url) {
-        return '<img class="md-img" alt="' + escapeAttr(alt) + '" src="' + escapeAttr(url) +
-          '" title="点击查看" onerror="this.setAttribute(\'data-missing\',\'1\')">';
-      })
-      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_m, t, url) {
-        return '<a href="' + escapeAttr(url) + '" data-mdlink="1" rel="noopener">' + t + "</a>";
-      });
-  }
-  function renderMarkdown(src) {
-    // 注意：不能先对整段 escapeHtml——"> 引用" 的 > 会被转成 &gt;，块级引用就永远匹配不上。
-    // 正确做法：逐行判定块级语法，输出时再对该行转义。
-    var lines = String(src || "").split("\n");
-    var out = [];
-    var inList = false;
-    var inCode = false;
-    var codeBuf = [];
-    var m;
-    function closeList() {
-      if (inList) { out.push(inList === "ol" ? "</ol>" : "</ul>"); inList = false; }
-    }
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      if (/^```/.test(line)) {
-        if (inCode) {
-          out.push("<pre><code>" + codeBuf.join("\n") + "</code></pre>");
-          codeBuf = [];
-          inCode = false;
-        } else {
-          closeList();
-          inCode = true;
-        }
-        continue;
-      }
-      if (inCode) { codeBuf.push(escapeHtml(line)); continue; }
-      if ((m = line.match(/^### (.*)/))) { closeList(); out.push("<h3>" + inlineMd(escapeHtml(m[1])) + "</h3>"); continue; }
-      if ((m = line.match(/^## (.*)/))) { closeList(); out.push("<h2>" + inlineMd(escapeHtml(m[1])) + "</h2>"); continue; }
-      if ((m = line.match(/^# (.*)/))) { closeList(); out.push("<h1>" + inlineMd(escapeHtml(m[1])) + "</h1>"); continue; }
-      if (/^---+$/.test(line)) { closeList(); out.push("<hr>"); continue; }
-      if ((m = line.match(/^> (.*)/))) { closeList(); out.push("<blockquote>" + inlineMd(escapeHtml(m[1])) + "</blockquote>"); continue; }
-      if ((m = line.match(/^\s*[-*] (.*)/))) {
-        if (!inList) { out.push("<ul>"); inList = "ul"; }
-        if (inList === "ol") { out.push("</ol>"); out.push("<ul>"); inList = "ul"; }
-        out.push("<li>" + inlineMd(escapeHtml(m[1])) + "</li>");
-        continue;
-      }
-      if ((m = line.match(/^\s*\d+\. (.*)/))) {
-        if (!inList) { out.push("<ol>"); inList = "ol"; }
-        if (inList === "ul") { out.push("</ul>"); out.push("<ol>"); inList = "ol"; }
-        out.push("<li>" + inlineMd(escapeHtml(m[1])) + "</li>");
-        continue;
-      }
-      if (line.trim() === "") {
-        closeList();
-        continue;
-      }
-      closeList();
-      out.push("<p>" + inlineMd(escapeHtml(line)) + "</p>");
-    }
-    closeList();
-    if (inCode) out.push("<pre><code>" + codeBuf.join("\n") + "</code></pre>");
-    return out.join("\n");
-  }
 
   /* ---------------- DOM ---------------- */
   var el = {};
@@ -1878,12 +1812,6 @@
     if (!state.token) return;
     clearTimeout(syncTimer);
     syncTimer = setTimeout(syncAll, SYNC_DEBOUNCE_MS);
-  }
-  // 合法笔记 id（与 server 端校验一致）：挡掉脏 id / 会引发原型污染的键
-  var NOTE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-  function isValidNoteId(id) {
-    if (typeof id !== "string" || !NOTE_ID_RE.test(id)) return false;
-    return id !== "__proto__" && id !== "constructor" && id !== "prototype";
   }
   var pendingConflictCount = 0; // 本轮同步产生了多少条冲突副本（用于提示用户）
   // 双端同时修改同一篇笔记时，把"本机尚未同步成功的版本"另存为一条独立笔记

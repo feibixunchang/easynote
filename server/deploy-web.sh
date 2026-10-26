@@ -27,7 +27,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 WEB="${HERE}/web"
 SOCK="/tmp/easynote-deploy-$$.sock"
 
-FILES=(index.html styles.css app.js sw.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png)
+FILES=(index.html styles.css app.js shared/core.js sw.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png)
 
 SSH_OPTS=(-o "ControlPath=${SOCK}" -o RequestTTY=no)
 
@@ -41,6 +41,7 @@ echo "==> 连接 ${TARGET} 端口 ${PORT}（这里会要你输一次密码）"
 ssh -p "${PORT}" -o ControlMaster=yes -o "ControlPath=${SOCK}" -o ControlPersist=180 -fnN "${TARGET}"
 
 echo "==> 上传到 ${REMOTE_DIR}"
+ssh -p "${PORT}" "${SSH_OPTS[@]}" "${TARGET}" "mkdir -p '${REMOTE_DIR}/shared'"
 failed=0
 for f in "${FILES[@]}"; do
   if [ -f "${WEB}/${f}" ]; then

@@ -15,6 +15,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
+# 先同步共享核心（网页版需要自己的那份 shared/core.js）
+if [ -x tools/build-shared.sh ]; then bash tools/build-shared.sh >/dev/null 2>&1 || true; fi
+
 SRC="app.js"
 DEST="server/web/app.js"
 SW="server/web/sw.js"

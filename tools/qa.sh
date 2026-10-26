@@ -17,7 +17,7 @@ cd "$ROOT" || exit 1
 fail=0
 
 echo "== 1/3 语法检查 =="
-for f in app.js mobile/www/app.js server/web/app.js main.js preload.js updater.js server/server.js server/test-sync.js; do
+for f in app.js mobile/www/app.js server/web/app.js shared/core.js main.js preload.js updater.js server/server.js server/test-sync.js tools/test-core.js; do
   if node --check "$f" >/dev/null 2>&1; then
     echo "   ✓ $f"
   else
@@ -39,6 +39,15 @@ fi
 echo ""
 echo "== 3/3 三端一致性守卫 =="
 if bash tools/parity-check.sh | tail -3; then
+  echo "   ✓ 通过"
+else
+  echo "   ✗ 未通过"
+  fail=1
+fi
+
+echo ""
+echo "== 共享核心单元测试 =="
+if node tools/test-core.js | tail -3; then
   echo "   ✓ 通过"
 else
   echo "   ✗ 未通过"

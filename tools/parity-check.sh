@@ -88,6 +88,32 @@ only_m=$(diff "$DESKTOP" "$MOBILE" 2>/dev/null | grep -c "^>")
 echo "  桌面 vs 移动：桌面独有 ${only_d} 行，移动独有 ${only_m} 行"
 echo "  （这两端仍有大量历史分叉，属已知技术债；同步/协议相关逻辑已由上面 A 强制对齐）"
 
+# ---------- D. 共享核心 shared/core.js（纯函数唯一来源） ----------
+echo ""
+echo "== D. 共享核心 shared/core.js =="
+CORE="shared/core.js"
+if [ -f "$CORE" ]; then
+  for d in mobile/www/shared/core.js server/web/shared/core.js; do
+    if [ -f "$d" ] && diff -q "$CORE" "$d" >/dev/null 2>&1; then
+      echo "  ✓ $d 与 shared/core.js 一致"
+    else
+      echo "  ✗ $d 缺失或与 shared/core.js 不一致（运行 bash tools/build-shared.sh）"
+      fail=1
+    fi
+  done
+  for h in index.html mobile/www/index.html server/web/index.html; do
+    if grep -q 'shared/core.js' "$h"; then
+      echo "  ✓ $h 已引入 shared/core.js"
+    else
+      echo "  ✗ $h 未引入 shared/core.js（必须排在 app.js 之前）"
+      fail=1
+    fi
+  done
+else
+  echo "  ✗ 找不到 shared/core.js"
+  fail=1
+fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then
   echo "✅ 一致性检查通过"
