@@ -1,5 +1,6 @@
 /* 生成 iOS / Android 图标与启动图（纯 JS，无需 sharp）
- * 用法：node tools/gen-icons.js
+ * 用法：npm i --no-save pngjs && node tools/gen-icons.js
+ *       （pngjs 未列入 package.json 依赖，运行时临时装即可）
  * 来源：桌面端图标 build/icons/1024x1024.png（蓝底白笔记本）
  */
 "use strict";
@@ -84,6 +85,68 @@ function makeSplash(w, h, icon, bg, ratio) {
   return s;
 }
 
+/* iOS App Icon 必须【满幅不透明】方形——圆角由系统自己裁。
+ * 源图标是带透明圆角的方形（macOS/Windows 桌面端需要圆角），若直接拿来当 iOS 图标：
+ * 收起 App 的动画里，缩小中的卡片盖住图标上半部，露出的下方两角会透出白底，
+ * 表现为"图标下面两个角有白色边角"。这里把透明角用邻近的蓝色渐变铺满，并去掉 alpha 通道。*/
+function flattenOpaque(src) {
+  const w = src.width, h = src.height;
+  const dst = new PNG({ width: w, height: h });
+  src.data.copy(dst.data);
+  const cx = w >> 1, cy = h >> 1;
+  let filled = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (dst.data[i + 3] > 250) continue;
+      const dx = x < cx ? 1 : (x > cx ? -1 : 0);
+      const dy = y < cy ? 1 : (y > cy ? -1 : 0);
+      let nx = x, ny = y;
+      for (let k = 0; k < 256; k++) {
+        nx += dx; ny += dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) break;
+        const j = (ny * w + nx) * 4;
+        if (dst.data[j + 3] > 250) {
+          dst.data[i] = dst.data[j];
+          dst.data[i + 1] = dst.data[j + 1];
+          dst.data[i + 2] = dst.data[j + 2];
+          dst.data[i + 3] = 255;
+          filled++;
+          break;
+        }
+      }
+    }
+  }
+  for (let i = 3; i < dst.data.length; i += 4) dst.data[i] = 255;
+  console.log("iOS 图标：铺满透明角", filled, "像素（已转为不透明）");
+  return dst;
+}
+// 输出不带 alpha 通道（colorType 2 = RGB）——带 alpha 的图标会被 App Store 拒收
+function writePngRGB(p, png) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, PNG.sync.write(png, { colorType: 2 }));
+}
+// 居中放大（先裁掉边缘再放大回原尺寸）：让笔记本在图标里更饱满。
+// 背景是平滑蓝色渐变，放大 18% 看不出接缝。
+const IOS_ICON_ZOOM = 1.18;
+function zoomCenter(src, z) {
+  const w = src.width, h = src.height;
+  const cw = Math.round(w / z), ch = Math.round(h / z);
+  const ox = Math.round((w - cw) / 2), oy = Math.round((h - ch) / 2);
+  const cropped = new PNG({ width: cw, height: ch });
+  for (let y = 0; y < ch; y++) {
+    for (let x = 0; x < cw; x++) {
+      const si = ((y + oy) * w + (x + ox)) * 4;
+      const di = (y * cw + x) * 4;
+      cropped.data[di] = src.data[si];
+      cropped.data[di + 1] = src.data[si + 1];
+      cropped.data[di + 2] = src.data[si + 2];
+      cropped.data[di + 3] = src.data[si + 3];
+    }
+  }
+  return resize(cropped, w, h);
+}
+
 /* ---------- 主流程 ---------- */
 const icon = readPng(SRC);
 const bg = brandColor(icon);
@@ -131,8 +194,9 @@ splashDirs.forEach(function (d) {
 });
 console.log("Android 启动图:", splashCount, "张");
 
-// 5) iOS AppIcon（单 1024 通用图标）
-writePng(path.join(IOS_ASSETS, "AppIcon.appiconset", "AppIcon-512@2x.png"), icon);
+// 5) iOS AppIcon（单 1024 通用图标）：居中放大让笔记本更饱满 + 满幅不透明 + 无 alpha 通道
+writePngRGB(path.join(IOS_ASSETS, "AppIcon.appiconset", "AppIcon-512@2x.png"),
+  flattenOpaque(zoomCenter(icon, IOS_ICON_ZOOM)));
 
 // 6) iOS 启动图（imageset 指定的三张 2732x2732）
 const splashSet = path.join(IOS_ASSETS, "Splash.imageset");
