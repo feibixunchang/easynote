@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.26";
+  var APP_VERSION = "1.0.27";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -859,7 +859,7 @@
         '<button data-action="color" class="' + (note.color ? "active" : "") + '" title="设置颜色标签">●</button>' +
         '<button data-action="markdown" class="' + (note.markdown ? "active" : "") + '" title="开启 / 关闭 Markdown">M↓</button>' +
         // 拍照/相册放在靠前位置：手机上工具栏是横向滚动的，原来排在第 7 位经常被挤出屏幕看不见
-        '<button data-action="insertImage" title="插入图片（拍照 / 相册）">🖼</button>' +
+        '<button data-action="insertImage" title="拍照 / 从相册选图">📷</button>' +
         '<button data-action="preview" class="' + (state.preview ? "active" : "") + '" title="预览" ' + (note.markdown ? "" : "disabled") + ">👁</button>" +
         '<button data-action="insertText" title="插入文本（引用/代码/分隔线/日期）">文</button>' +
         '<button data-action="insertLink" title="插入链接">🔗</button>' +

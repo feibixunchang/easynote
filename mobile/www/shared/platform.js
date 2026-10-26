@@ -110,6 +110,8 @@
     return arr;
   }
   var CRED_KEY = "simplenote_zh_lock_cred"; // 浏览器端 WebAuthn 凭证 id（仅本机）
+  var bioLastError = null;  // 上次生物识别失败原因（便于界面提示 / 用户反馈排查）
+  var bioType = "";         // faceId / touchId / fingerprint …
   function credStore() { try { return w.localStorage || null; } catch (e) { return null; } }
 
   /* ---------- 画布等比压缩（移动端插图用；桌面端由主进程原生压缩）---------- */
@@ -348,7 +350,17 @@
     biometric: {
       label: function () {
         if (NAME === "electron") return "Touch ID";
-        return "面容 / 指纹";
+        var map = { faceId: "面容 ID", face: "面容", touchId: "指纹", fingerprint: "指纹", iris: "虹膜", multiple: "面容 / 指纹" };
+        return map[bioType] || "面容 / 指纹";
+      },
+      // 上次失败原因（{ code, message }）：让界面能提示清楚"为什么没过"，而不是笼统的"未通过"
+      lastError: function () { return bioLastError; },
+      // 设备生物识别的原始信息（排查用）
+      diagnose: function () {
+        if (NAME !== "capacitor") return Promise.resolve({ name: NAME, type: bioType });
+        var b = bioPlugin();
+        if (!b || !b.checkBiometry) return Promise.resolve({ name: NAME, available: false });
+        return Promise.resolve(b.checkBiometry()).catch(function (e) { return { error: String((e && e.message) || e) }; });
       },
       isAvailable: function () {
         if (NAME === "electron") {
@@ -359,8 +371,12 @@
           var b = bioPlugin();
           if (!b || !b.checkBiometry) return Promise.resolve(false);
           return Promise.resolve(b.checkBiometry())
-            .then(function (r) { return !!(r && r.isAvailable); })
-            .catch(function () { return false; });
+            .then(function (r) {
+              bioType = (r && r.biometryType) || "";
+              if (r && !r.isAvailable) bioLastError = { code: r.code || "", message: r.reason || "" };
+              return !!(r && r.isAvailable);
+            })
+            .catch(function (e) { bioLastError = { code: "", message: String((e && e.message) || e) }; return false; });
         }
         if (!hasWebAuthn()) return Promise.resolve(false);
         try {
@@ -392,17 +408,26 @@
       verify: function (reason) {
         if (NAME === "electron") {
           if (!w.electronAPI || !w.electronAPI.biometricVerify) return Promise.resolve(false);
+          bioLastError = null;
           return Promise.resolve(w.electronAPI.biometricVerify(reason || "解锁简易笔记"))
-            .then(function (ok) { return !!ok; }).catch(function () { return false; });
+            .then(function (ok) { if (!ok) bioLastError = { code: "userCancelOrFailed", message: "Touch ID 未通过或被取消" }; return !!ok; })
+            .catch(function () { return false; });
         }
         if (NAME === "capacitor") {
           var b = bioPlugin();
           if (!b || !b.authenticate) return Promise.resolve(false);
+          bioLastError = null;
           return Promise.resolve(b.authenticate({
             reason: reason || "解锁简易笔记",
             cancelTitle: "取消",
+            // 插件的选项名是 allowDeviceCredential（单数）；false = 只用生物识别，不退回设备密码。
+            // 两个名字都传，兼容不同版本。
+            allowDeviceCredential: false,
             allowDeviceCredentials: false,
-          })).then(function () { return true; }).catch(function () { return false; });
+          })).then(function () { return true; }).catch(function (e) {
+            bioLastError = { code: (e && e.code) || "", message: String((e && e.message) || e) };
+            return false;
+          });
         }
         var cs = credStore();
         var id = cs && cs.getItem(CRED_KEY);
@@ -416,7 +441,10 @@
               userVerification: "required",
               timeout: 60000,
             },
-          })).then(function (a) { return !!a; }).catch(function () { return false; });
+          })).then(function (a) { return !!a; }).catch(function (e) {
+            bioLastError = { code: (e && e.name) || "", message: String((e && e.message) || e) };
+            return false;
+          });
         } catch (e) { return Promise.resolve(false); }
       },
       saveCredential: function (id) {

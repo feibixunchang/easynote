@@ -92,6 +92,23 @@
       write(r);
       return true;
     },
+    // 生物识别不可用时的原因（用于设置界面提示，如「未录入 Face ID」）
+    biometricIssue: function () {
+      var err = (plat() && plat().biometric && plat().biometric.lastError) ? plat().biometric.lastError() : null;
+      if (!err) return "";
+      var map = {
+        biometryNotEnrolled: "系统里还没录入面容 / 指纹，请先到系统设置里录入",
+        biometryNotAvailable: "此设备当前不可用面容 / 指纹（可能被其他应用占用或系统已锁定）",
+        biometryLockout: "面容 / 指纹连续失败次数过多，已被系统临时锁定",
+        userCancel: "你取消了生物识别",
+        userFallback: "你选择了用密码，而不是面容 / 指纹",
+        appCancel: "生物识别被系统取消（请稍后重试）",
+        systemCancel: "生物识别被系统取消（请稍后重试）",
+        passcodeNotSet: "设备没有设置锁屏密码，无法使用生物识别",
+      };
+      return map[err.code] || ("生物识别不可用：" + (err.message || err.code || "未知原因"));
+    },
+
     // 设备是否支持（异步，与硬件/系统设置有关）
     areBiometricsSupported: function () {
       try {
@@ -103,7 +120,11 @@
     enableBiometric: function () {
       if (!api.isEnabled()) return Promise.resolve({ ok: false, error: "请先设置数字密码" });
       return api.areBiometricsSupported().then(function (ok) {
-        if (!ok) return { ok: false, error: "此设备不支持面容 / 指纹" };
+        if (!ok) {
+          // 尽量给出"为什么不行"（未录入 / 被系统锁定 / 设备不支持），而不是笼统的"不支持"
+          var why = api.biometricIssue();
+          return { ok: false, error: why || "此设备不支持面容 / 指纹（或系统里尚未启用）" };
+        }
         var enroll = (plat() && plat().biometric && plat().biometric.enroll)
           ? plat().biometric.enroll() : Promise.resolve(true);
         return Promise.resolve(enroll).then(function (cred) {
@@ -131,7 +152,10 @@
         ? plat().biometric.verify(reason || "解锁简易笔记") : Promise.resolve(false);
       return Promise.resolve(verify).then(function (ok) {
         if (ok) { succeed(); return true; }
-        setMsg("生物识别未通过，请用数字密码解锁");
+        // 把失败原因带上（如 biometryNotEnrolled / userCancel），便于用户判断是"没录入"还是"手势误触"
+        var err = (plat() && plat().biometric && plat().biometric.lastError) ? plat().biometric.lastError() : null;
+        var code = (err && err.code) ? "（" + err.code + "）" : "";
+        setMsg("生物识别未通过" + code + "，请用数字密码解锁");
         return false;
       }).catch(function () { return false; });
     },
@@ -289,9 +313,15 @@
     setMsg("");
     startCountdown();
     if (autoBio) {
-      // 稍等一下再弹，避免刚切到锁屏就打断用户的手势
+      // 稍等一下再弹，避免刚切到锁屏就打断用户的手势；
+      // 首次失败常见于"应用刚启动、系统还没准备好"，1.2 秒后静默重试一次。
       clearTimeout(autoBioTimer);
-      autoBioTimer = setTimeout(function () { api.tryBiometric().catch(function () {}); }, 350);
+      autoBioTimer = setTimeout(function () {
+        api.tryBiometric().then(function (ok) {
+          if (ok) return;
+          autoBioTimer = setTimeout(function () { api.tryBiometric().catch(function () {}); }, 1200);
+        }).catch(function () {});
+      }, 900);
     }
   }
   function hide() {
