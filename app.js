@@ -361,12 +361,9 @@
   function getSnippet(note) {
     return EZCore.noteSnippet(note && note.content);
   }
+  // 标签提取（跳过图片/链接内容里的 #）：算法在共享核心，三端一致
   function extractTags(content) {
-    var tags = {};
-    var re = /(?:^|\s)#([\u4e00-\u9fa5A-Za-z0-9_-]+)/g;
-    var m;
-    while ((m = re.exec(content))) tags[m[1].toLowerCase()] = true;
-    return Object.keys(tags);
+    return EZCore.extractTags(content);
   }
   function formatDate(ts) {
     var d = new Date(ts);
@@ -1829,52 +1826,13 @@
   // 拉取合并：服务端版本更新则采用服务端的；本地修改更新则保留本地。
   // 返回是否有实际变更（决定是否需要重存/重渲染，避免每 3 秒无意义地全量重写）。
   var pendingConflictCount = 0; // 本轮同步产生了多少条冲突副本（用于提示用户）
-  // 双端同时修改同一篇笔记时，把"本机尚未同步成功的版本"另存为一条独立笔记
-  // （冲突副本），避免被服务端版本直接覆盖导致改动静默丢失。
-  function makeConflictCopy(loc) {
-    var now = Date.now();
-    var title = "无标题";
-    var lines = (loc.content || "").split("\n");
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].trim()) { title = lines[i].trim().slice(0, 30); break; }
-    }
-    return {
-      id: uid(),
-      content:
-        "⚠ 冲突副本（本机版本 · 另一台设备也修改过这条笔记）\n" +
-        "原笔记标题：" + title + "\n" +
-        "生成时间：" + new Date(now).toLocaleString("zh-CN") + "\n\n" +
-        (loc.content || ""),
-      pinned: false, markdown: !!loc.markdown, deleted: false,
-      color: loc.color || "",
-      createdDate: loc.createdDate || now,
-      modifiedDate: now,
-    };
-  }
+  // 合并服务端增量（含"双端同时修改 → 冲突副本"）：算法在共享核心，
+  // 这里只做"接上本端状态"的适配，保证三端语义完全一致。
   function mergeNotes(incoming) {
-    var byId = {};
-    state.notes.forEach(function (n) { if (n && n.id) byId[n.id] = n; });
-    var changed = false;
-    var conflicts = [];
-    (incoming || []).forEach(function (n) {
-      if (!n || !isValidNoteId(n.id)) return;
-      var loc = byId[n.id];
-      if (!loc) { byId[n.id] = n; changed = true; return; }
-      if ((n.modifiedDate || 0) > (loc.modifiedDate || 0)) {
-        // 本地有"还没推送成功"的改动，且服务端版本内容不同 → 先留一份冲突副本再覆盖
-        var pushedAt = (state.pushed && state.pushed[n.id]) || 0;
-        var localDirty = (loc.modifiedDate || 0) > pushedAt;
-        if (localDirty && (loc.content || "") !== (n.content || "")) conflicts.push(makeConflictCopy(loc));
-        byId[n.id] = n; changed = true;
-      }
-    });
-    if (conflicts.length) {
-      conflicts.forEach(function (c) { byId[c.id] = c; });
-      pendingConflictCount += conflicts.length;
-      changed = true;
-    }
-    state.notes = Object.keys(byId).map(function (k) { return byId[k]; });
-    return changed;
+    var r = EZCore.mergeIncoming(state.notes, incoming, state.pushed, uid);
+    if (r.conflicts.length) pendingConflictCount += r.conflicts.length;
+    if (r.changed) state.notes = r.notes;
+    return r.changed;
   }
   // 尚未成功推送的笔记（按各笔记"上次同步时的修改时间"判断，不受多设备时钟差异影响）
   function notesToPush() {

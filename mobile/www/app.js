@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.17";
+  var APP_VERSION = "1.0.18";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -284,12 +284,9 @@
   function getSnippet(note) {
     return EZCore.noteSnippet(note && note.content);
   }
+  // 标签提取（跳过图片/链接内容里的 #）：算法在共享核心，三端一致
   function extractTags(content) {
-    var tags = {};
-    var re = /(?:^|\s)#([\u4e00-\u9fa5A-Za-z0-9_-]+)/g;
-    var m;
-    while ((m = re.exec(content))) tags[m[1].toLowerCase()] = true;
-    return Object.keys(tags);
+    return EZCore.extractTags(content);
   }
   function formatDate(ts) {
     var d = new Date(ts);
@@ -1836,52 +1833,13 @@
     syncTimer = setTimeout(syncAll, SYNC_DEBOUNCE_MS);
   }
   var pendingConflictCount = 0; // 本轮同步产生了多少条冲突副本（用于提示用户）
-  // 双端同时修改同一篇笔记时，把"本机尚未同步成功的版本"另存为一条独立笔记
-  // （冲突副本），避免被服务端版本直接覆盖导致改动静默丢失。
-  function makeConflictCopy(loc) {
-    var now = Date.now();
-    var title = "无标题";
-    var lines = (loc.content || "").split("\n");
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].trim()) { title = lines[i].trim().slice(0, 30); break; }
-    }
-    return {
-      id: uid(),
-      content:
-        "⚠ 冲突副本（本机版本 · 另一台设备也修改过这条笔记）\n" +
-        "原笔记标题：" + title + "\n" +
-        "生成时间：" + new Date(now).toLocaleString("zh-CN") + "\n\n" +
-        (loc.content || ""),
-      pinned: false, markdown: !!loc.markdown, deleted: false,
-      color: loc.color || "",
-      createdDate: loc.createdDate || now,
-      modifiedDate: now,
-    };
-  }
+  // 合并服务端增量（含"双端同时修改 → 冲突副本"）：算法在共享核心，
+  // 这里只做"接上本端状态"的适配，保证三端语义完全一致。
   function mergeNotes(incoming) {
-    var byId = {};
-    state.notes.forEach(function (n) { if (n && n.id) byId[n.id] = n; });
-    var changed = false;
-    var conflicts = [];
-    (incoming || []).forEach(function (n) {
-      if (!n || !isValidNoteId(n.id)) return;
-      var loc = byId[n.id];
-      if (!loc) { byId[n.id] = n; changed = true; return; }
-      if ((n.modifiedDate || 0) > (loc.modifiedDate || 0)) {
-        // 本地有"还没推送成功"的改动，且服务端版本内容不同 → 先留一份冲突副本再覆盖
-        var pushedAt = (state.pushed && state.pushed[n.id]) || 0;
-        var localDirty = (loc.modifiedDate || 0) > pushedAt;
-        if (localDirty && (loc.content || "") !== (n.content || "")) conflicts.push(makeConflictCopy(loc));
-        byId[n.id] = n; changed = true;
-      }
-    });
-    if (conflicts.length) {
-      conflicts.forEach(function (c) { byId[c.id] = c; });
-      pendingConflictCount += conflicts.length;
-      changed = true;
-    }
-    state.notes = Object.keys(byId).map(function (k) { return byId[k]; });
-    return changed;
+    var r = EZCore.mergeIncoming(state.notes, incoming, state.pushed, uid);
+    if (r.conflicts.length) pendingConflictCount += r.conflicts.length;
+    if (r.changed) state.notes = r.notes;
+    return r.changed;
   }
   function notesToPush() {
     return state.notes.filter(function (n) {
@@ -2127,18 +2085,32 @@
     return best;
   }
   function fetchLatestMobileVersion() {
-    // ① GitHub API releases 列表，过滤 mobile-v* 标签
-    return fetchWithTimeout("https://api.github.com/repos/" + REPO + "/releases?per_page=20")
-      .then(function (r) {
-        if (!r.ok) throw new Error("http " + r.status);
-        return r.json();
-      })
-      .then(function (list) {
-        if (!Array.isArray(list)) throw new Error("bad data");
-        var v = pickMobileVersion(list.map(function (x) { return x && x.tag_name; }));
-        if (v) return { version: v, url: "https://github.com/" + REPO + "/releases/tag/mobile-v" + v };
-        throw new Error("no mobile release");
-      })
+    // ① GitHub API releases 列表（过滤 mobile-v*）。
+    //    api.github.com 在国内常被限流（60 次/小时/IP）或不通 ——
+    //    依次尝试公共镜像代理（与下载渠道同源），全失败再退到 atom 源。
+    var api = "https://api.github.com/repos/" + REPO + "/releases?per_page=20";
+    var apiUrls = [
+      api,
+      "https://ghproxy.com/" + api,
+      "https://mirror.ghproxy.com/" + api,
+      "https://github.bibaiyu.com/" + api,
+    ];
+    var tryApi = function (i) {
+      if (i >= apiUrls.length) return Promise.reject(new Error("api unavailable"));
+      return fetchWithTimeout(apiUrls[i], 9000)
+        .then(function (r) {
+          if (!r.ok) throw new Error("http " + r.status);
+          return r.json();
+        })
+        .then(function (list) {
+          if (!Array.isArray(list)) throw new Error("bad data");
+          var v = pickMobileVersion(list.map(function (x) { return x && x.tag_name; }));
+          if (v) return { version: v, url: "https://github.com/" + REPO + "/releases/tag/mobile-v" + v };
+          throw new Error("no mobile release");
+        })
+        .catch(function () { return tryApi(i + 1); });
+    };
+    return tryApi(0)
       .catch(function () {
         // ② atom 源兜底
         return fetchWithTimeout("https://github.com/" + REPO + "/releases.atom")

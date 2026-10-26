@@ -43,7 +43,8 @@ TOKENS=(
   "/api/notes/sync"           # 同步接口
   "/api/notes/purge"          # 永久删除上报
   "isValidNoteId"             # 笔记 id 合法性校验（防原型污染）
-  "makeConflictCopy"          # 多端同时修改 → 冲突副本
+  "extractTags"               # 标签提取（共享核心）
+  "mergeIncoming"             # 同步合并 + 冲突副本（共享核心）
   "mergeNotes"                # 合并服务端增量
   "applySyncResponse"         # 应用同步响应
   "notesToPush"               # 计算待推送
@@ -64,6 +65,19 @@ for t in "${TOKENS[@]}"; do
     fail=1
   else
     printf '  ✓ %-22s 三端齐全\n' "$t"
+  fi
+done
+
+# ---------- A2. 共享核心必须包含纯函数（三端共用）----------
+echo ""
+echo "== A2. 共享核心纯函数 =="
+CORE_FUNCS=("isValidNoteId" "extractTags" "mergeIncoming" "makeConflictCopy" "noteTitle" "noteSnippet" "searchText" "isImageOnly")
+for t in "${CORE_FUNCS[@]}"; do
+  if grep -q "function $t(" shared/core.js 2>/dev/null; then
+    printf '  ✓ %-16s 已在 shared/core.js\n' "$t"
+  else
+    echo "  ✗ $t 未在 shared/core.js 中定义"
+    fail=1
   fi
 done
 

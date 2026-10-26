@@ -637,6 +637,15 @@ body.dark .sync-pill.ok { color: #4ade80; }
   line-height: 1.65;
   word-break: break-word;
 }
+/* 预览开启时上下分栏：上面渲染结果、下面继续编辑。
+   手机屏幕窄，限制预览最多占 40% 高度，保证下方输入区还能正常打字（桌面端是 42%）。 */
+.preview-pane.split {
+  flex: 0 0 40%;
+  max-height: 42vh;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+
 .preview-pane h1, .preview-pane h2, .preview-pane h3 { line-height: 1.4; margin: 0.8em 0 0.4em; }
 .preview-pane h1 { font-size: 1.4em; }
 .preview-pane h2 { font-size: 1.25em; }

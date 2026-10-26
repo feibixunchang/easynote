@@ -101,6 +101,35 @@ ok("多张内嵌图片 → true",
   EZ.isImageOnly("![a](data:image/png;base64,AA)\n![b](data:image/jpeg;base64,BB)") === true);
 
 
+console.log("\n【8】extractTags（标签提取，跳过图片/链接里的 #）");
+ok("普通标签", JSON.stringify(EZ.extractTags("今天 #工作 #待办")) === JSON.stringify(["工作", "待办"]));
+ok("英文标签小写归一", EZ.extractTags("#Work")[0] === "work");
+ok("图片名里的 # 不算标签", EZ.extractTags("![IMG#1](data:image/png;base64,AA)").length === 0,
+  JSON.stringify(EZ.extractTags("![IMG#1](data:image/png;base64,AA)")));
+ok("链接 URL 里的 #anchor 不算标签", EZ.extractTags("[站](https://a.b#top)").length === 0);
+ok("正文标签照常识别", EZ.extractTags("![图](data:image/png;base64,AA)\n#真标签").indexOf("真标签") !== -1);
+
+console.log("\n【9】mergeIncoming（同步合并 + 冲突副本，三端一致的关键）");
+var _seq = 0;
+function nid() { _seq++; return "n_conf" + _seq; }
+function mk(id, content, mod) { return { id: id, content: content, modifiedDate: mod }; }
+// 注意语义：pushedMap 记录"本机版本已被服务端确认的时间"。
+// 本地改动时间 > pushedMap[id] ⇒ 视为"本机有未确认的改动"。
+var r0 = EZ.mergeIncoming([], [mk("n_b2", "服务端来的", 100)], {}, nid);
+ok("全新笔记入库", r0.changed && r0.notes.length === 1 && r0.conflicts.length === 0);
+var r1 = EZ.mergeIncoming([mk("n_a", "本地旧", 100)], [mk("n_a", "服务端新", 200)], { "n_a": 100 }, nid);
+ok("后写覆盖", r1.changed && r1.notes[0].content === "服务端新");
+ok("本机版本已被服务端确认（pushed=100）→ 不产生冲突", r1.conflicts.length === 0);
+var r2 = EZ.mergeIncoming([mk("n_a", "本地未推送", 300)], [mk("n_a", "服务端新", 400)], { "n_a": 100 }, nid);
+ok("双端同时改 → 保底冲突副本", r2.conflicts.length === 1 && r2.notes.length === 2);
+ok("冲突副本保留本机内容", r2.notes.some(function (n) { return n.content.indexOf("本地未推送") !== -1; }));
+ok("冲突副本标题不含 base64", r2.conflicts[0].content.indexOf("base64") === -1);
+var r3 = EZ.mergeIncoming([], [mk("n_b", "新笔记", 1)], {}, nid);
+ok("服务端新增 → 入库", r3.changed && r3.notes.length === 1);
+var r4 = EZ.mergeIncoming([], [{ id: "__proto__", content: "x", modifiedDate: 1 }], {}, nid);
+ok("脏 id 被忽略", r4.notes.length === 0);
+
+
 console.log("\n────────────────────────");
 console.log("通过 " + pass + " 项，失败 " + fail + " 项");
 process.exit(fail ? 1 : 0);

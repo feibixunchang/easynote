@@ -4,7 +4,7 @@
  * 注：Service Worker 需要安全上下文（HTTPS 或 localhost）才能注册生效；
  *     当前 NAS 走 http://192.168.x 局域网时注册会静默失败（被 catch 吞掉），
  *     届时仍可"添加到主屏幕"（靠 apple-touch-icon），但离线缓存需待配置 HTTPS。 */
-const CACHE = "easynote-web-v10";
+const CACHE = "easynote-web-v11";
 const SHELL = [
   "./",
   "index.html",

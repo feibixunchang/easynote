@@ -186,8 +186,75 @@
     return !c.replace(/!\[[^\]]*\]\([^)]*\)/g, "").trim();
   }
 
+  /* ---------- 标签 & 同步合并（纯逻辑，三端共用）----------
+   * 说明：这两个以前在桌面/移动各写一份，语义必须完全一致（否则两端列表/冲突表现不同）。
+   */
+
+  // 标签提取：#标签（支持中文）。会先剥掉图片与链接语法 ——
+  // 否则图片名 ![](…/#1.png) 或链接 URL 里的 # 会被误判成标签。
+  function extractTags(content) {
+    var text = String(content || "")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+      .replace(/\[[^\]]*\]\([^)]*\)/g, " ");
+    var tags = {};
+    var re = /(?:^|\s)#([\u4e00-\u9fa5A-Za-z0-9_-]+)/g;
+    var m;
+    while ((m = re.exec(text))) tags[m[1].toLowerCase()] = true;
+    return Object.keys(tags);
+  }
+
+  // 冲突副本：双端同时改同一篇时，把"本机尚未同步成功的版本"另存为独立笔记，
+  // 避免被服务端版本直接覆盖导致改动静默丢失。newId 由各端传入（桌面/移动的 uid()）。
+  function makeConflictCopy(loc, newId) {
+    var now = Date.now();
+    return {
+      id: newId(),
+      content:
+        "⚠ 冲突副本（本机版本 · 另一台设备也修改过这条笔记）\n" +
+        "原笔记标题：" + noteTitle(loc.content).slice(0, 30) + "\n" +
+        "生成时间：" + new Date(now).toLocaleString("zh-CN") + "\n\n" +
+        (loc.content || ""),
+      pinned: false, markdown: !!loc.markdown, deleted: false,
+      color: loc.color || "",
+      createdDate: loc.createdDate || now,
+      modifiedDate: now,
+    };
+  }
+
+  // 合并服务端增量：按 modifiedDate"后写覆盖"（last-write-wins），
+  // 并在"本机有未推送改动且内容不同"时保底一份冲突副本。
+  // 返回 { notes, changed, conflicts }：notes 是合并后的新数组。
+  function mergeIncoming(localNotes, incoming, pushedMap, newId) {
+    var byId = {};
+    (localNotes || []).forEach(function (n) { if (n && n.id) byId[n.id] = n; });
+    var changed = false;
+    var conflicts = [];
+    (incoming || []).forEach(function (n) {
+      if (!n || !isValidNoteId(n.id)) return;
+      var loc = byId[n.id];
+      if (!loc) { byId[n.id] = n; changed = true; return; }
+      if ((n.modifiedDate || 0) > (loc.modifiedDate || 0)) {
+        var pushedAt = (pushedMap && pushedMap[n.id]) || 0;
+        var localDirty = (loc.modifiedDate || 0) > pushedAt;
+        if (localDirty && (loc.content || "") !== (n.content || "")) {
+          conflicts.push(makeConflictCopy(loc, newId));
+        }
+        byId[n.id] = n;
+        changed = true;
+      }
+    });
+    if (conflicts.length) {
+      conflicts.forEach(function (c) { byId[c.id] = c; });
+      changed = true;
+    }
+    return { notes: Object.keys(byId).map(function (k) { return byId[k]; }), changed: changed, conflicts: conflicts };
+  }
+
   root.EZCore = {
     isImageOnly: isImageOnly,
+    extractTags: extractTags,
+    makeConflictCopy: makeConflictCopy,
+    mergeIncoming: mergeIncoming,
     noteTitle: noteTitle,
     noteSnippet: noteSnippet,
     searchText: searchText,
