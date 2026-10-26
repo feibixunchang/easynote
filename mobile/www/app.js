@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.30";
+  var APP_VERSION = "1.0.31";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
