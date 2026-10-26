@@ -130,6 +130,28 @@ var r4 = EZ.mergeIncoming([], [{ id: "__proto__", content: "x", modifiedDate: 1 
 ok("脏 id 被忽略", r4.notes.length === 0);
 
 
+console.log("\n【10】内嵌图片折叠 / 还原（编辑框不显示 base64，但图片数据绝不能丢）");
+var big = "data:image/png;base64," + "A".repeat(400);
+var c1 = "![e1.jpg](" + big + ")\n这是说明文字";
+var m1 = EZ.maskEmbeddedImages(c1);
+ok("编辑框里不再出现 base64", m1.text.indexOf("base64") === -1, m1.text.slice(0, 60));
+ok("折叠成短标记（含图片名）", m1.text.indexOf("![e1.jpg](内嵌图片1)") !== -1, m1.text.slice(0, 60));
+ok("还原后与原文逐字节一致（数据不丢）", EZ.unmaskEmbeddedImages(m1.text, m1.tokens) === c1);
+var c2 = "![a](" + big + ")\n中间文字\n![b](" + big.replace("A", "B") + ")";
+var m2 = EZ.maskEmbeddedImages(c2);
+ok("两张图分别编号 1/2", m2.text.indexOf("内嵌图片1") !== -1 && m2.text.indexOf("内嵌图片2") !== -1);
+ok("多图还原一致", EZ.unmaskEmbeddedImages(m2.text, m2.tokens) === c2);
+var edited = m2.text.replace("中间文字", "中间文字\n在图片下方新增的一行");
+ok("在图片下方加字后仍能正确还原",
+  EZ.unmaskEmbeddedImages(edited, m2.tokens) === c2.replace("中间文字", "中间文字\n在图片下方新增的一行"));
+var del = m2.text.replace(/!\[b\]\(内嵌图片2\)\n?/, "");
+ok("删掉一张图不报错、另一张仍还原", EZ.unmaskEmbeddedImages(del, m2.tokens).indexOf("data:image/png;base64,") !== -1);
+ok("无 token 时原样返回", EZ.unmaskEmbeddedImages("纯文字", []) === "纯文字");
+ok("外链图片不折叠", EZ.maskEmbeddedImages("![x](https://a/b.png)").text === "![x](https://a/b.png)");
+ok("折叠后仍是合法 Markdown 图片语法（预览能渲染）",
+  /!\[[^\]]*\]\([^)]*\)/.test(m1.text));
+
+
 console.log("\n────────────────────────");
 console.log("通过 " + pass + " 项，失败 " + fail + " 项");
 process.exit(fail ? 1 : 0);

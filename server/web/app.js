@@ -41,6 +41,14 @@
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 软件发布页（侧栏入口 & 更新失败时的"下载页"出口共用）
   var RELEASES_URL = "https://github.com/feibixunchang/easynote/releases";
+
+  /* 平台能力统一入口（见 shared/platform.js）：
+     Electron → electronAPI；移动端 → Capacitor；浏览器 → Web API。
+     业务代码只调 platform()，不再到处判断 window.electronAPI。 */
+  function platform() {
+    if (typeof EZPlatform !== "undefined" && EZPlatform && EZPlatform.bridge) return EZPlatform.bridge;
+    return window.electronAPI || {};
+  }
   var HISTORY_KEY = "simplenote_zh_history";     // 笔记历史快照（仅本地，不上传、不参与同步）
   // 纯浏览器环境（无 Electron）下的回退字体清单（均为 Windows 常见中文字体）
   var FALLBACK_FONTS = [
@@ -725,6 +733,19 @@
     }
   }
 
+  /* 编辑框里的"图片折叠"：内嵌图片显示成 ![名](内嵌图片N)，
+     既不显示一屏 base64，又能把光标放到图片下方继续打字；
+     保存与预览时会按编号还原成完整 data: 数据。 */
+  var editorMaskTokens = [];
+  function editorTextOf(content) {
+    var m = EZCore.maskEmbeddedImages(content);
+    editorMaskTokens = m.tokens;
+    return m.text;
+  }
+  function contentOfEditor(text) {
+    return EZCore.unmaskEmbeddedImages(text, editorMaskTokens);
+  }
+
   function renderEditor() {
     var note = state.notes.filter(function (n) { return n.id === state.currentId; })[0];
     var valid = note && !!note.deleted === (state.view === "trash");
@@ -746,25 +767,19 @@
     setToolbar(note);
 
     if (state.preview && note.markdown && !note.deleted) {
+      // 上下分栏：上面渲染结果（能看图），下面仍是输入框 ——
+      // 图片在输入框里折叠成 ![名](内嵌图片N)，所以不会出现一屏 base64，
+      // 光标可以停在图片下方继续打字。
       el.previewPane.hidden = false;
+      el.previewPane.classList.add("split");
       el.previewPane.innerHTML = renderMarkdown(note.content);
-      if (EZCore.isImageOnly(note.content)) {
-        // 纯图片笔记：只显示图片本身，不做"上下分栏"——
-        // 否则下方编辑区仍是一整屏 base64（用户看到的是一堆字母，像图片没插进去）。
-        // 想加文字/改文字时，点工具栏 👁 即可切回输入框。
-        el.previewPane.classList.remove("split");
-        el.editor.hidden = true;
-      } else {
-        // 图文混排：上下分栏 —— 上面渲染结果（能看图），下面仍是输入框，可继续打字。
-        el.previewPane.classList.add("split");
-        el.editor.hidden = false;
-        if (document.activeElement !== el.editor) el.editor.value = note.content;
-      }
+      el.editor.hidden = false;
+      if (document.activeElement !== el.editor) el.editor.value = editorTextOf(note.content);
     } else {
       el.editor.hidden = false;
       el.previewPane.hidden = true;
       el.previewPane.classList.remove("split");
-      if (document.activeElement !== el.editor) el.editor.value = note.content;
+      if (document.activeElement !== el.editor) el.editor.value = editorTextOf(note.content);
     }
   }
 
@@ -796,7 +811,14 @@
       state.preview = true;
     }
     render();
-    if (state.view !== "trash" && !(n && EZCore.isImageOnly(n.content))) el.editor.focus();
+    if (state.view !== "trash") {
+      el.editor.focus();
+      // 图片笔记：把光标放到正文末尾（图片下方），打开就能接着打字
+      if (n && EZCore.isImageOnly(n.content)) {
+        var len0 = el.editor.value.length;
+        try { el.editor.selectionStart = el.editor.selectionEnd = len0; } catch (e) {}
+      }
+    }
   }
 
   function createNote() {
@@ -1235,8 +1257,7 @@
     // 侧栏「软件发布页」：打开 GitHub Releases（下载最新版 / 看更新说明）
     if (el.navReleases) {
       el.navReleases.addEventListener("click", function () {
-        if (api && api.openExternal) api.openExternal(RELEASES_URL);
-        else window.open(RELEASES_URL, "_blank");
+        platform().openExternal(RELEASES_URL);
       });
     }
     el.navTrash.addEventListener("click", function () {
@@ -1329,7 +1350,7 @@
       if (!lastSnap || Date.now() - lastSnap.ts >= HISTORY_MIN_GAP_MS) {
         maybeSnapshot(note.id, prevContent);
       }
-      note.content = el.editor.value;
+      note.content = contentOfEditor(el.editor.value); // 还原折叠的内嵌图片
       note.modifiedDate = Date.now();
       // 内存即时更新，落盘防抖（带图笔记内容大，逐字写盘会卡输入）
       scheduleEditorSave();
@@ -1338,7 +1359,7 @@
       // 开着预览时同步刷新渲染结果（图片笔记体积大，用更长的防抖）
       clearTimeout(previewDebounce);
       previewDebounce = setTimeout(function () {
-        if (!el.previewPane.hidden) el.previewPane.innerHTML = renderMarkdown(el.editor.value);
+        if (!el.previewPane.hidden) el.previewPane.innerHTML = renderMarkdown(contentOfEditor(el.editor.value));
       }, 700);
     });
     // 失焦 / 关窗前把待落盘的改动写掉，避免最后 600ms 内的输入丢失
@@ -1453,7 +1474,7 @@
       if (a) {
         e.preventDefault();
         var href = a.getAttribute("href");
-        if (href) openExternal(href);
+        if (href) platform().openExternal(href);   // 平台层：桌面用系统浏览器、网页版新标签页
         return;
       }
       var img = e.target.closest("img.md-img");
@@ -2483,7 +2504,7 @@
     el.editor.focus();
     var api = window.electronAPI;
     if (api && api.getClipboardText) {
-      api.getClipboardText().then(function (text) {
+      platform().readText().then(function (text) {
         if (text == null) text = "";
         if (!text) { toast("剪贴板为空或无法读取"); return; }
         insertAtCursor(ta, text);
@@ -2531,7 +2552,13 @@
       var ta = el.editor;
       var start = ta.selectionStart, end = ta.selectionEnd;
       var before = ta.value.slice(0, start);
-      var md = (start > 0 && !/\n$/.test(before) ? "\n" : "") + "![" + name + "](" + url + ")\n";
+      // 内嵌图片在输入框里用折叠标记显示（编号与 editorTextOf 一致），保存时自动还原
+      var shownUrl = url;
+      if (/^data:/i.test(url)) {
+        editorMaskTokens.push(url);
+        shownUrl = "内嵌图片" + editorMaskTokens.length;
+      }
+      var md = (start > 0 && !/\n$/.test(before) ? "\n" : "") + "![" + name + "](" + shownUrl + ")\n";
       var caret = start + md.length;
       ta.value = before + md + ta.value.slice(end);
       triggerInput(ta);
@@ -2894,8 +2921,7 @@
         // 这里直接改成「前往下载」，跳到 Release 页面。
         showBanner("发现新版本 v" + info.version, "前往下载", function () {
           var u = releaseUrl || RELEASES_PAGE;
-          if (api && api.openExternal) api.openExternal(u);
-          else window.open(u, "_blank");
+          platform().openExternal(u);
         });
       }
     }
@@ -2932,7 +2958,7 @@
       if (pageBtn) {
         pageBtn.hidden = false;
         pageBtn.onclick = function () {
-          if (api.openExternal) api.openExternal(RELEASES_PAGE);
+          platform().openExternal(RELEASES_PAGE);
         };
       }
     }
@@ -2973,14 +2999,14 @@
         if (dl) {
           dl.hidden = false;
           dl.textContent = "下载页";
-          dl.onclick = function () { if (api.openExternal) api.openExternal(RELEASES_PAGE); };
+          dl.onclick = function () { platform().openExternal(RELEASES_PAGE); };
         }
         if (pageBtn) {
           pageBtn.hidden = false;
           pageBtn.textContent = s.file ? "打开文件夹" : "下载页";
           pageBtn.onclick = function () {
             if (s.file && api.revealFile) api.revealFile(s.file);
-            else if (api.openExternal) api.openExternal(RELEASES_PAGE);
+            else platform().openExternal(RELEASES_PAGE);
           };
         }
       } else if (s.phase === "error") {

@@ -250,8 +250,32 @@
     return { notes: Object.keys(byId).map(function (k) { return byId[k]; }), changed: changed, conflicts: conflicts };
   }
 
+  /* ---------- 编辑框：内嵌图片"折叠" ----------
+   * 编辑框是纯文本 textarea，内嵌图片的 data: 有几万字符 —— 直接显示就是一屏字母
+   * （用户以为图片没插进去），而且很难把光标放到图片下方继续打字。
+   * 做法：显示时把 ![](data:...) 折叠成 ![](内嵌图片N)，保存/预览时按 N 还原。
+   */
+  var MD_IMG_DATA_RE = /!\[([^\]]*)\]\((data:[^)]*)\)/g;
+  function maskEmbeddedImages(content) {
+    var tokens = [];
+    var text = String(content || "").replace(MD_IMG_DATA_RE, function (all, alt, dataUrl) {
+      tokens.push(dataUrl);
+      return "![" + alt + "](内嵌图片" + tokens.length + ")";
+    });
+    return { text: text, tokens: tokens };
+  }
+  function unmaskEmbeddedImages(text, tokens) {
+    if (!tokens || !tokens.length) return String(text || "");
+    return String(text || "").replace(/\((内嵌图片(\d+))\)/g, function (all, _ph, n) {
+      var i = parseInt(n, 10) - 1;
+      return (i >= 0 && i < tokens.length) ? "(" + tokens[i] + ")" : all;
+    });
+  }
+
   root.EZCore = {
     isImageOnly: isImageOnly,
+    maskEmbeddedImages: maskEmbeddedImages,
+    unmaskEmbeddedImages: unmaskEmbeddedImages,
     extractTags: extractTags,
     makeConflictCopy: makeConflictCopy,
     mergeIncoming: mergeIncoming,

@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.20";
+  var APP_VERSION = "1.0.21";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -875,6 +875,19 @@
     }
   }
 
+  /* 编辑框里的"图片折叠"：内嵌图片显示成 ![名](内嵌图片N)，
+     既不显示一屏 base64，又能把光标放到图片下方继续打字；
+     保存与预览时会按编号还原成完整 data: 数据。 */
+  var editorMaskTokens = [];
+  function editorTextOf(content) {
+    var m = EZCore.maskEmbeddedImages(content);
+    editorMaskTokens = m.tokens;
+    return m.text;
+  }
+  function contentOfEditor(text) {
+    return EZCore.unmaskEmbeddedImages(text, editorMaskTokens);
+  }
+
   function renderEditor() {
     var note = currentNote();
     var valid = !!note && !!note.deleted === (state.view === "trash");
@@ -895,25 +908,19 @@
     setToolbar(note);
 
     if (state.preview && note.markdown && !note.deleted) {
+      // 上下分栏：上面渲染结果（能看图），下面仍是输入框 ——
+      // 图片在输入框里折叠成 ![名](内嵌图片N)，所以不会出现一屏 base64，
+      // 光标可以停在图片下方继续打字。
       el.previewPane.hidden = false;
+      el.previewPane.classList.add("split");
       el.previewPane.innerHTML = renderMarkdown(note.content);
-      if (EZCore.isImageOnly(note.content)) {
-        // 纯图片笔记：只显示图片本身，不做"上下分栏"——
-        // 否则下方编辑区仍是一整屏 base64（用户看到的是一堆字母，像图片没插进去）。
-        // 想加文字/改文字时，点工具栏 👁 即可切回输入框。
-        el.previewPane.classList.remove("split");
-        el.editor.hidden = true;
-      } else {
-        // 图文混排：上下分栏 —— 上面渲染结果（能看图），下面仍是输入框，可继续打字。
-        el.previewPane.classList.add("split");
-        el.editor.hidden = false;
-        if (document.activeElement !== el.editor) el.editor.value = note.content;
-      }
+      el.editor.hidden = false;
+      if (document.activeElement !== el.editor) el.editor.value = editorTextOf(note.content);
     } else {
       el.editor.hidden = false;
       el.previewPane.hidden = true;
       el.previewPane.classList.remove("split");
-      if (document.activeElement !== el.editor) el.editor.value = note.content;
+      if (document.activeElement !== el.editor) el.editor.value = editorTextOf(note.content);
     }
   }
 
@@ -992,6 +999,16 @@
     renderEditor();
     if (!isWide()) setScreen("editor");
     else renderAll();
+    // 图片笔记：把光标放到正文末尾（图片下方），打开就能接着打字
+    if (n && EZCore.isImageOnly(n.content)) {
+      setTimeout(function () {
+        try {
+          el.editor.focus();
+          var len0 = el.editor.value.length;
+          el.editor.selectionStart = el.editor.selectionEnd = len0;
+        } catch (e) {}
+      }, 60);
+    }
   }
 
   /* ---------------- 侧边抽屉菜单（Simplenote 风格） ----------------
@@ -1594,7 +1611,10 @@
       var ta = el.editor;
       var start = ta.selectionStart, end = ta.selectionEnd;
       var before = ta.value.slice(0, start);
-      var md = (start > 0 && !/\n$/.test(before) ? "\n" : "") + "![" + formatDateTime(new Date()) + "](" + dataUrl + ")\n";
+      // 内嵌图片在输入框里用折叠标记显示（编号与 editorTextOf 一致），保存时自动还原
+      editorMaskTokens.push(dataUrl);
+      var shownUrl = "内嵌图片" + editorMaskTokens.length;
+      var md = (start > 0 && !/\n$/.test(before) ? "\n" : "") + "![" + formatDateTime(new Date()) + "](" + shownUrl + ")\n";
       var caret = start + md.length;
       ta.value = before + md + ta.value.slice(end);
       triggerInput(ta);
@@ -2142,6 +2162,11 @@
     return 0;
   }
   function openUrl(url) {
+    // 统一走平台适配层（shared/platform.js）：Capacitor 用 Browser 插件，浏览器用新标签页
+    if (typeof EZPlatform !== "undefined" && EZPlatform && EZPlatform.openExternal) {
+      EZPlatform.openExternal(url);
+      return;
+    }
     var browser = plugin("Browser");
     if (browser && browser.open) {
       browser.open({ url: url }).catch(function () { window.open(url, "_blank"); });
@@ -2296,7 +2321,7 @@
       el.editor.addEventListener("input", function () {
       var note = currentNote();
       if (!note || note.deleted) return;
-      note.content = el.editor.value;
+      note.content = contentOfEditor(el.editor.value); // 还原折叠的内嵌图片
       note.modifiedDate = Date.now();
       el.editorTitle.textContent = getTitle(note);
       // 内存即时更新，落盘防抖（带图笔记动辄几 MB，逐字写盘会卡死输入）
@@ -2306,7 +2331,7 @@
       // 开着预览时同步刷新渲染结果（图片笔记体积大，用更长的防抖）
       clearTimeout(previewDebounce);
       previewDebounce = setTimeout(function () {
-        if (!el.previewPane.hidden) el.previewPane.innerHTML = renderMarkdown(el.editor.value);
+        if (!el.previewPane.hidden) el.previewPane.innerHTML = renderMarkdown(contentOfEditor(el.editor.value));
       }, 700);
     });
 

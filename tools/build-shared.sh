@@ -12,32 +12,43 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
-SRC="shared/core.js"
-DESTS=("mobile/www/shared/core.js" "server/web/shared/core.js")
+# 共享核心 + 平台适配层：两份都要复制到移动端与网页版目录
+SRCS=("shared/core.js" "shared/platform.js")
+DIRS=("mobile/www/shared" "server/web/shared")
 
-[ -f "$SRC" ] || { echo "✗ 找不到 $SRC"; exit 1; }
-
-for d in "${DESTS[@]}"; do
-  mkdir -p "$(dirname "$d")"
-  if diff -q "$SRC" "$d" >/dev/null 2>&1; then
-    echo "== $d 已是最新"
-  else
-    cp "$SRC" "$d"
-    echo "== 已同步 $SRC → $d"
+for SRC in "${SRCS[@]}"; do
+  if [ ! -f "$SRC" ]; then
+    echo "✗ 找不到 $SRC"
+    exit 1
   fi
+  NAME="$(basename "$SRC")"
+  for DIR in "${DIRS[@]}"; do
+    DEST="$DIR/$NAME"
+    mkdir -p "$DIR"
+    if diff -q "$SRC" "$DEST" >/dev/null 2>&1; then
+      echo "== $DEST 已是最新"
+    else
+      cp "$SRC" "$DEST"
+      echo "== 已同步 $SRC -> $DEST"
+    fi
+  done
 done
 
 fail=0
-for d in "${DESTS[@]}"; do
-  if ! diff -q "$SRC" "$d" >/dev/null 2>&1; then
-    echo "✗ $d 与 $SRC 不一致"
-    fail=1
-  fi
+for SRC in "${SRCS[@]}"; do
+  NAME="$(basename "$SRC")"
+  for DIR in "${DIRS[@]}"; do
+    DEST="$DIR/$NAME"
+    if ! diff -q "$SRC" "$DEST" >/dev/null 2>&1; then
+      echo "✗ $DEST 与 $SRC 不一致"
+      fail=1
+    fi
+  done
 done
 
 if [ "$fail" -eq 0 ]; then
-  echo "== 共享核心三端一致 ✓"
+  echo "== 共享核心 / 平台适配层 三端一致 ✓"
 else
-  echo "== ❌ 共享核心三端不一致"
+  echo "== ❌ 产物不一致"
 fi
 exit "$fail"

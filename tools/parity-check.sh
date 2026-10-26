@@ -128,6 +128,29 @@ else
   fail=1
 fi
 
+# platform.js（平台适配层）同样三端一致
+if [ -f "shared/platform.js" ]; then
+  for d in mobile/www/shared/platform.js server/web/shared/platform.js; do
+    if [ -f "$d" ] && diff -q "shared/platform.js" "$d" >/dev/null 2>&1; then
+      echo "  ✓ $d 与 shared/platform.js 一致"
+    else
+      echo "  ✗ $d 缺失或与 shared/platform.js 不一致（运行 bash tools/build-shared.sh）"
+      fail=1
+    fi
+  done
+  for h in index.html mobile/www/index.html server/web/index.html; do
+    if grep -q 'shared/platform.js' "$h"; then
+      echo "  ✓ $h 已引入 shared/platform.js"
+    else
+      echo "  ✗ $h 未引入 shared/platform.js（必须排在 app.js 之前）"
+      fail=1
+    fi
+  done
+else
+  echo "  ✗ 找不到 shared/platform.js"
+  fail=1
+fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then
   echo "✅ 一致性检查通过"

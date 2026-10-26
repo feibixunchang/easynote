@@ -27,7 +27,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 WEB="${HERE}/web"
 SOCK="/tmp/easynote-deploy-$$.sock"
 
-FILES=(index.html styles.css app.js shared/core.js sw.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png)
+FILES=(index.html styles.css app.js shared/core.js shared/platform.js sw.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png)
 
 SSH_OPTS=(-o "ControlPath=${SOCK}" -o RequestTTY=no)
 
