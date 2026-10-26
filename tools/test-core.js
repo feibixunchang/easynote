@@ -92,6 +92,15 @@ ok("searchText 保留图片名（仍可搜到）",
   EZ.searchText("![风景](data:image/png;base64,AAAA)").indexOf("风景") !== -1);
 
 
+console.log("\n【7】isImageOnly（纯图片笔记判定：决定打开时是否直接显示图片）");
+ok("只有内嵌图片 → true", EZ.isImageOnly("![e1.jpg](data:image/png;base64,AAAA)") === true);
+ok("图片 + 文字 → false", EZ.isImageOnly("![e1.jpg](data:image/png;base64,AAAA)\n说明文字") === false);
+ok("纯文字 → false", EZ.isImageOnly("今天开会") === false);
+ok("外链图片（非 data:）→ false", EZ.isImageOnly("![x](https://a/b.png)") === false);
+ok("多张内嵌图片 → true",
+  EZ.isImageOnly("![a](data:image/png;base64,AA)\n![b](data:image/jpeg;base64,BB)") === true);
+
+
 console.log("\n────────────────────────");
 console.log("通过 " + pass + " 项，失败 " + fail + " 项");
 process.exit(fail ? 1 : 0);

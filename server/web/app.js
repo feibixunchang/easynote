@@ -746,13 +746,20 @@
     setToolbar(note);
 
     if (state.preview && note.markdown && !note.deleted) {
-      // 「开着预览就没法加文字」：以前这里会把编辑器整个隐藏。
-      // 改成上下分栏——上面是渲染结果（能看图），下面仍然是输入框，可以继续打字。
       el.previewPane.hidden = false;
-      el.previewPane.classList.add("split");
       el.previewPane.innerHTML = renderMarkdown(note.content);
-      el.editor.hidden = false;
-      if (document.activeElement !== el.editor) el.editor.value = note.content;
+      if (EZCore.isImageOnly(note.content)) {
+        // 纯图片笔记：只显示图片本身，不做"上下分栏"——
+        // 否则下方编辑区仍是一整屏 base64（用户看到的是一堆字母，像图片没插进去）。
+        // 想加文字/改文字时，点工具栏 👁 即可切回输入框。
+        el.previewPane.classList.remove("split");
+        el.editor.hidden = true;
+      } else {
+        // 图文混排：上下分栏 —— 上面渲染结果（能看图），下面仍是输入框，可继续打字。
+        el.previewPane.classList.add("split");
+        el.editor.hidden = false;
+        if (document.activeElement !== el.editor) el.editor.value = note.content;
+      }
     } else {
       el.editor.hidden = false;
       el.previewPane.hidden = true;
@@ -782,8 +789,14 @@
   function selectNote(id) {
     state.currentId = id;
     state.preview = false;
+    var n = state.notes.filter(function (x) { return x.id === id; })[0];
+    // 纯图片笔记：默认直接看预览（否则编辑区是一整屏 base64，像"图片没插进去"）
+    if (n && !n.deleted && EZCore.isImageOnly(n.content)) {
+      if (!n.markdown) { n.markdown = true; save(); }
+      state.preview = true;
+    }
     render();
-    if (state.view !== "trash") el.editor.focus();
+    if (state.view !== "trash" && !(n && EZCore.isImageOnly(n.content))) el.editor.focus();
   }
 
   function createNote() {

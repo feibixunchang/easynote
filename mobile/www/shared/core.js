@@ -177,7 +177,17 @@
     return String(content || "").replace(/!\[([^\]]*)\]\(data:[^)]*\)/g, "$1 [图片] ");
   }
 
+  // 是否"纯图片笔记"：含内嵌图片，且除图片外没有别的文字。
+  // 用途：这类笔记打开时直接显示图片预览 —— 否则编辑区是一整屏 base64，
+  // 用户看到"一堆字母"，会以为图片没插进去。
+  function isImageOnly(content) {
+    var c = String(content || "");
+    if (!/!\[[^\]]*\]\(data:/.test(c)) return false;
+    return !c.replace(/!\[[^\]]*\]\([^)]*\)/g, "").trim();
+  }
+
   root.EZCore = {
+    isImageOnly: isImageOnly,
     noteTitle: noteTitle,
     noteSnippet: noteSnippet,
     searchText: searchText,

@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.16";
+  var APP_VERSION = "1.0.17";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -898,13 +898,20 @@
     setToolbar(note);
 
     if (state.preview && note.markdown && !note.deleted) {
-      // 「开着预览就没法加文字」：以前这里把编辑器整个隐藏了。
-      // 改成上下分栏——上面渲染结果（能看图），下面仍是输入框，可继续打字。
       el.previewPane.hidden = false;
-      el.previewPane.classList.add("split");
       el.previewPane.innerHTML = renderMarkdown(note.content);
-      el.editor.hidden = false;
-      if (document.activeElement !== el.editor) el.editor.value = note.content;
+      if (EZCore.isImageOnly(note.content)) {
+        // 纯图片笔记：只显示图片本身，不做"上下分栏"——
+        // 否则下方编辑区仍是一整屏 base64（用户看到的是一堆字母，像图片没插进去）。
+        // 想加文字/改文字时，点工具栏 👁 即可切回输入框。
+        el.previewPane.classList.remove("split");
+        el.editor.hidden = true;
+      } else {
+        // 图文混排：上下分栏 —— 上面渲染结果（能看图），下面仍是输入框，可继续打字。
+        el.previewPane.classList.add("split");
+        el.editor.hidden = false;
+        if (document.activeElement !== el.editor) el.editor.value = note.content;
+      }
     } else {
       el.editor.hidden = false;
       el.previewPane.hidden = true;
@@ -979,6 +986,12 @@
   function goEditor(id) {
     state.currentId = id;
     state.preview = false;
+    var n = state.notes.filter(function (x) { return x.id === id; })[0];
+    // 纯图片笔记：默认直接看预览（否则编辑区是一整屏 base64）
+    if (n && !n.deleted && EZCore.isImageOnly(n.content)) {
+      if (!n.markdown) { n.markdown = true; save(); }
+      state.preview = true;
+    }
     renderEditor();
     if (!isWide()) setScreen("editor");
     else renderAll();
@@ -1022,7 +1035,17 @@
 
   /* ---------------- 行为 ---------------- */
   function selectNote(id) {
-    if (isWide()) { state.currentId = id; state.preview = false; renderAll(); return; }
+    if (isWide()) {
+      state.currentId = id;
+      state.preview = false;
+      var wn = state.notes.filter(function (x) { return x.id === id; })[0];
+      if (wn && !wn.deleted && EZCore.isImageOnly(wn.content)) {
+        if (!wn.markdown) { wn.markdown = true; save(); }
+        state.preview = true;
+      }
+      renderAll();
+      return;
+    }
     goEditor(id);
   }
 
