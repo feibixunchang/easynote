@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.21";
+  var APP_VERSION = "1.0.22";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -1297,6 +1297,10 @@
   }
 
   function copyText(text) {
+    // 统一走平台适配层：移动端 Capacitor Clipboard，失败自动回退 Web 实现
+    if (typeof EZPlatform !== "undefined" && EZPlatform && EZPlatform.copyText) {
+      try { EZPlatform.copyText(text); return; } catch (e) {}
+    }
     var cb = plugin("Clipboard");
     if (cb && cb.write) {
       cb.write({ string: text }).then(function () {}, function () { webCopy(text); });
@@ -1323,15 +1327,10 @@
   }
 
   function shareNote(note) {
-    var share = plugin("Share");
-    var text = note.content || "";
-    if (share && share.share) {
-      share.share({ title: getTitle(note), text: text, dialogTitle: "分享笔记" })
-        .catch(function () { copyText(text); toast("已复制笔记内容（分享不可用）"); });
-    } else {
-      copyText(text);
-      toast("已复制笔记内容到剪贴板");
-    }
+    // 适配层：移动端系统分享面板；不支持/失败时自动回退复制到剪贴板
+    var text = (note && note.content) || "";
+    EZPlatform.shareText({ title: noteCaption(note), text: text, dialogTitle: "分享笔记" })
+      .catch(function () { toast("分享失败，已尝试复制内容"); });
   }
 
   var toastTimer;
@@ -1374,25 +1373,15 @@
     if (!state.notes.length) { toast("没有可导出的笔记"); return; }
     var data = JSON.stringify(state.notes, null, 2);
     var name = "simplenote-zh-backup-" + new Date().toISOString().slice(0, 10) + ".json";
-    var fs = plugin("Filesystem");
-    var share = plugin("Share");
-    if (fs && fs.writeFile && share && share.share) {
-      toast("正在准备备份…");
-      fs.writeFile({
-        path: name,
-        data: utf8ToBase64(data),
-        directory: "CACHE",
-        recursive: true,
-      }).then(function (r) {
-        return share.share({ title: "简易笔记备份", url: r.uri, dialogTitle: "导出笔记备份" });
-      }).catch(function () {
+    // 适配层：手机写缓存目录后拉起系统"保存/分享"；失败回退为浏览器下载
+    EZPlatform.exportText({ defaultName: name, content: data, mime: "application/json", title: "简易笔记备份" })
+      .then(function (r) {
+        if (r && r.ok) { toast("已导出备份"); return; }
+        if (r && r.canceled) return;
         webDownload(name, data);
         toast("已导出备份");
-      });
-    } else {
-      webDownload(name, data);
-      toast("已导出备份");
-    }
+      })
+      .catch(function () { webDownload(name, data); toast("已导出备份"); });
   }
   function webDownload(name, data) {
     var blob = new Blob([data], { type: "application/json" });
@@ -1575,7 +1564,6 @@
   }
 
   // 图片插入：拍照 / 相册 → 压缩（最长边 ≤1600px）→ 内嵌 data URI
-  var IMG_MAX = 1600;
   function openImageSourceSheet() {
     var note = currentNote();
     if (!note || note.deleted) return;
@@ -1593,20 +1581,12 @@
     ]);
   }
   function pickImage(source) {
-    var camera = plugin("Camera");
     var note = currentNote();
     if (!note || note.deleted) return;
-    camera.getPhoto({
-      quality: 90,
-      resultType: "dataUrl",
-      source: source, // "camera" | "photos"
-      width: 2000,
-      correctOrientation: true,
-    }).then(function (photo) {
-      if (!photo || !photo.dataUrl) { toast("插入图片失败"); return; }
-      return resizeDataUrl(photo.dataUrl, IMG_MAX);
-    }).then(function (dataUrl) {
-      if (!dataUrl) return;
+    // 适配层负责"拍照/相册 + 等比压缩"（compressed 后的 dataUrl），这里只管插入
+    EZPlatform.pickImage({ source: source }).then(function (photo) {
+      var dataUrl = photo && photo.dataUrl;
+      if (!dataUrl) { toast("插入图片失败或已取消"); return; }
       // 智能排版：图片单独占一行，光标落在图片下方，便于接着打字
       var ta = el.editor;
       var start = ta.selectionStart, end = ta.selectionEnd;
@@ -1628,39 +1608,9 @@
         el.editor.selectionStart = el.editor.selectionEnd = Math.min(caret, len);
       } catch (e) {}
       toast("已插入图片（已内嵌压缩）");
-    }).catch(function () {
-      toast("插入图片失败或已取消");
-    });
+    }).catch(function () { toast("插入图片失败或已取消"); });
   }
-  // canvas 压缩：最长边限制在 max 像素内，保持比例；小图原样返回
-  function resizeDataUrl(dataUrl, max) {
-    return new Promise(function (resolve) {
-      var done = false;
-      var finish = function (v) { if (!done) { done = true; resolve(v); } };
-      // 安全网：个别 WebView 上 onload 可能不触发，5 秒后原样返回，绝不卡住插入流程
-      setTimeout(function () { finish(dataUrl); }, 5000);
-      var img = new Image();
-      img.onload = function () {
-        try {
-          var w = img.naturalWidth || img.width;
-          var h = img.naturalHeight || img.height;
-          var scale = Math.min(1, max / Math.max(w, h));
-          if (scale >= 1) { finish(dataUrl); return; }
-          var canvas = document.createElement("canvas");
-          canvas.width = Math.max(1, Math.round(w * scale));
-          canvas.height = Math.max(1, Math.round(h * scale));
-          var ctx = canvas.getContext && canvas.getContext("2d");
-          if (!ctx) { finish(dataUrl); return; } // 无 canvas 环境：原样返回
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          finish(canvas.toDataURL("image/jpeg", 0.85));
-        } catch (e) {
-          finish(dataUrl);
-        }
-      };
-      img.onerror = function () { finish(dataUrl); };
-      img.src = dataUrl;
-    });
-  }
+
 
   function insertLink() {
     var note = currentNote();
@@ -2083,74 +2033,16 @@
 
   /* ---------------- 更新检查（只认 mobile-v 开头的移动端版本） ---------------- */
   var REPO = "feibixunchang/easynote";
-  var MOBILE_TAG_RE = /^mobile-v(\d+(?:\.\d+){1,2})$/;
   // 软件发布页（抽屉入口 & 更新提示的"前往下载"共用）
   var RELEASES_URL = "https://github.com/feibixunchang/easynote/releases";
-  function fetchWithTimeout(url, ms) {
-    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    var timer = controller ? setTimeout(function () { controller.abort(); }, ms || 12000) : null;
-    return fetch(url, { signal: controller ? controller.signal : undefined }).then(function (r) {
-      if (timer) clearTimeout(timer);
-      return r;
-    }, function (e) {
-      if (timer) clearTimeout(timer);
-      throw e;
-    });
-  }
-  function pickMobileVersion(tags) {
-    var best = null;
-    (tags || []).forEach(function (t) {
-      var m = MOBILE_TAG_RE.exec(String(t || ""));
-      if (!m) return;
-      if (!best || compareVersions(m[1], best) > 0) best = m[1];
-    });
-    return best;
-  }
+
+
   function fetchLatestMobileVersion() {
-    // ① GitHub API releases 列表（过滤 mobile-v*）。
-    //    api.github.com 在国内常被限流（60 次/小时/IP）或不通 ——
-    //    依次尝试公共镜像代理（与下载渠道同源），全失败再退到 atom 源。
-    var api = "https://api.github.com/repos/" + REPO + "/releases?per_page=20";
-    var apiUrls = [
-      api,
-      "https://ghproxy.com/" + api,
-      "https://mirror.ghproxy.com/" + api,
-      "https://github.bibaiyu.com/" + api,
-    ];
-    var tryApi = function (i) {
-      if (i >= apiUrls.length) return Promise.reject(new Error("api unavailable"));
-      return fetchWithTimeout(apiUrls[i], 9000)
-        .then(function (r) {
-          if (!r.ok) throw new Error("http " + r.status);
-          return r.json();
-        })
-        .then(function (list) {
-          if (!Array.isArray(list)) throw new Error("bad data");
-          var v = pickMobileVersion(list.map(function (x) { return x && x.tag_name; }));
-          if (v) return { version: v, url: "https://github.com/" + REPO + "/releases/tag/mobile-v" + v };
-          throw new Error("no mobile release");
-        })
-        .catch(function () { return tryApi(i + 1); });
-    };
-    return tryApi(0)
-      .catch(function () {
-        // ② atom 源兜底
-        return fetchWithTimeout("https://github.com/" + REPO + "/releases.atom")
-          .then(function (r) {
-            if (!r.ok) throw new Error("http " + r.status);
-            return r.text();
-          })
-          .then(function (xml) {
-            var re = /<id>tag:github\.com,2008:Repository\/\d+\/([^<]+)<\/id>/g;
-            var tags = [];
-            var m;
-            while ((m = re.exec(xml)) !== null) tags.push(m[1]);
-            var v = pickMobileVersion(tags);
-            if (v) return { version: v, url: "https://github.com/" + REPO + "/releases/tag/mobile-v" + v };
-            return null;
-          })
-          .catch(function () { return null; });
-      });
+    // 统一走平台适配层：内部 = GitHub API（官方 + 镜像）→ releases.atom 兜底，过滤 mobile-v*
+    if (typeof EZPlatform !== "undefined" && EZPlatform && EZPlatform.checkLatestVersion) {
+      return EZPlatform.checkLatestVersion({ channel: "mobile" });
+    }
+    return Promise.resolve(null);
   }
   function compareVersions(a, b) {
     var pa = String(a).split(".").map(function (n) { return parseInt(n, 10) || 0; });

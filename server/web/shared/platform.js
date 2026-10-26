@@ -86,6 +86,95 @@
     }
   }
 
+  /* ---------- 画布等比压缩（移动端插图用；桌面端由主进程原生压缩）---------- */
+  function resizeDataUrl(dataUrl, max) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var finish = function (v) { if (!done) { done = true; resolve(v); } };
+      // 安全网：个别 WebView 上 onload 可能不触发，5 秒后原样返回，绝不卡住插入流程
+      w.setTimeout(function () { finish(dataUrl); }, 5000);
+      var img = new w.Image();
+      img.onload = function () {
+        try {
+          var iw = img.naturalWidth || img.width;
+          var ih = img.naturalHeight || img.height;
+          var scale = Math.min(1, max / Math.max(iw, ih));
+          if (scale >= 1) { finish(dataUrl); return; }
+          var canvas = w.document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(iw * scale));
+          canvas.height = Math.max(1, Math.round(ih * scale));
+          canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+          var out = canvas.toDataURL("image/jpeg", 0.85);
+          finish(out && out.length < dataUrl.length ? out : dataUrl);
+        } catch (e) { finish(dataUrl); }
+      };
+      img.onerror = function () { finish(dataUrl); };
+      img.src = dataUrl;
+    });
+  }
+
+  /* ---------- 版本标签解析 + GitHub 标签获取（更新检查用，三端共用）---------- */
+  var DESKTOP_TAG_RE = /^v(\d+(?:\.\d+){1,2})$/;
+  var MOBILE_TAG_RE = /^mobile-v(\d+(?:\.\d+){1,2})$/;
+  function cmpVersion(a, b) {
+    var pa = String(a).split(".").map(function (n) { return parseInt(n, 10) || 0; });
+    var pb = String(b).split(".").map(function (n) { return parseInt(n, 10) || 0; });
+    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+      var d = (pa[i] || 0) - (pb[i] || 0);
+      if (d !== 0) return d;
+    }
+    return 0;
+  }
+  function pickMaxVersion(tags, re) {
+    var best = null;
+    (tags || []).forEach(function (t) {
+      var m = re.exec(String(t || ""));
+      if (!m) return;
+      if (!best || cmpVersion(m[1], best) > 0) best = m[1];
+    });
+    return best;
+  }
+  // 取仓库的 release 标签：官方 API → 公共镜像 → releases.atom 兜底（国内 API 常被限流）
+  function fetchGithubTags(repo) {
+    var api = "https://api.github.com/repos/" + repo + "/releases?per_page=20";
+    var urls = [api, "https://ghproxy.com/" + api, "https://mirror.ghproxy.com/" + api, "https://github.bibaiyu.com/" + api];
+    function tryApi(i) {
+      if (i >= urls.length) return Promise.reject(new Error("api unavailable"));
+      return fetchWithTimeout(urls[i], 9000).then(function (r) {
+        if (!r.ok) throw new Error("http " + r.status);
+        return r.json();
+      }).then(function (list) {
+        if (!Array.isArray(list)) throw new Error("bad data");
+        var tags = list.map(function (x) { return x && x.tag_name; });
+        if (!tags.length) throw new Error("empty");
+        return tags;
+      }).catch(function () { return tryApi(i + 1); });
+    }
+    function atomFallback() {
+      return fetchWithTimeout("https://github.com/" + repo + "/releases.atom", 9000)
+        .then(function (r) { return r.text(); })
+        .then(function (xml) {
+          var re = /<id>tag:github\.com,2008:Repository\/\d+\/([^<]+)<\/id>/g;
+          var out = [], m;
+          while ((m = re.exec(xml)) !== null) out.push(m[1]);
+          return out;
+        })
+        .catch(function () { return []; });
+    }
+    return tryApi(0).catch(atomFallback);
+  }
+  function fetchWithTimeout(url, ms) {
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var timer = ctrl ? w.setTimeout(function () { ctrl.abort(); }, ms || 12000) : null;
+    return w.fetch(url, { signal: ctrl ? ctrl.signal : undefined }).then(function (r) {
+      if (timer) w.clearTimeout(timer);
+      return r;
+    }, function (e) {
+      if (timer) w.clearTimeout(timer);
+      throw e;
+    });
+  }
+
   /* ---------- 统一接口（各端按能力覆盖）---------- */
   var api = {
     name: NAME,
@@ -140,6 +229,107 @@
 
     platformInfo: function () {
       return { name: NAME, userAgent: (w.navigator && w.navigator.userAgent) || "" };
+    },
+
+    /* 各端能力开关：业务代码据此决定"按钮显示/是否提示不支持"，不再散落 if (electronAPI) */
+    capabilities: {
+      pickImage: NAME !== "browser",   // 浏览器暂不支持插图（避免把大图塞进 localStorage）
+      saveFile: true,
+      share: true,
+      update: true,
+      revealFile: NAME === "electron",
+      webdav: NAME === "electron",
+    },
+
+    /* 选图：桌面弹系统对话框（含内嵌/引用两种模式）；移动端拍照/相册并自动压缩；浏览器不支持 */
+    pickImage: function (opts) {
+      opts = opts || {};
+      if (NAME === "electron" && w.electronAPI.pickImage) {
+        return Promise.resolve(w.electronAPI.pickImage(opts.mode || "embed"));
+      }
+      if (NAME === "capacitor") {
+        var cam = plug("Camera");
+        if (!cam || !cam.getPhoto) return Promise.resolve(null);
+        return cam.getPhoto({
+          quality: 90,
+          resultType: "dataUrl",
+          source: opts.source || "photos", // camera | photos
+          width: 2000,
+          correctOrientation: true,
+        }).then(function (photo) {
+          if (!photo || !photo.dataUrl) return null;
+          return resizeDataUrl(photo.dataUrl, opts.max || 1600);
+        }).then(function (d) {
+          return d ? { name: "照片-" + Date.now() + ".jpg", dataUrl: d } : null;
+        }).catch(function () { return null; });
+      }
+      return Promise.resolve(null);
+    },
+
+    /* 分享文本：移动端用系统分享面板；浏览器用 Web Share（不支持则复制）；桌面端复制到剪贴板 */
+    shareText: function (opts) {
+      opts = opts || {};
+      var text = String(opts.text == null ? "" : opts.text);
+      if (NAME === "capacitor") {
+        var sh = plug("Share");
+        if (sh && sh.share) {
+          return Promise.resolve(sh.share({ title: opts.title || "", text: text, dialogTitle: opts.dialogTitle || "分享" }))
+            .catch(function () { return api.copyText(text); });
+        }
+      }
+      if (NAME === "browser" && w.navigator && w.navigator.share) {
+        return Promise.resolve(w.navigator.share({ title: opts.title || "", text: text }))
+          .catch(function () { return api.copyText(text); });
+      }
+      return Promise.resolve(api.copyText(text));
+    },
+
+    /* 导出文本文件：桌面弹保存对话框；移动端写缓存目录后拉起分享/保存；浏览器直接下载 */
+    exportText: function (opts) {
+      opts = opts || {};
+      if (NAME === "electron" && w.electronAPI.saveFile) return Promise.resolve(w.electronAPI.saveFile(opts));
+      if (NAME === "capacitor") {
+        var fs = plug("Filesystem"), sh = plug("Share");
+        var name = String(opts.defaultName || "note.txt");
+        if (fs && fs.writeFile) {
+          return Promise.resolve(fs.writeFile({
+            path: name,
+            data: String(opts.content || ""),
+            directory: "CACHE",
+            encoding: "utf8",
+            recursive: true,
+          })).then(function (r) {
+            var uri = (r && r.uri) || name;
+            if (sh && sh.share) {
+              return sh.share({ title: opts.title || name, url: uri, dialogTitle: "导出" })
+                .then(function () { return { ok: true, path: uri }; });
+            }
+            return { ok: true, path: uri };
+          }).catch(function () { return webSaveTextFile(opts); });
+        }
+      }
+      return webSaveTextFile(opts);
+    },
+
+    /* 检查最新版本：桌面走主进程（含托盘/通知等完整流程）；移动端看 mobile-v* 标签；网页版看 v* 标签 */
+    checkLatestVersion: function (opts) {
+      opts = opts || {};
+      var channel = opts.channel || (NAME === "capacitor" ? "mobile" : "desktop");
+      if (NAME === "electron" && w.electronAPI.checkUpdate) {
+        return Promise.resolve(w.electronAPI.checkUpdate()).then(function (r) {
+          return (r && r.ok && r.latest) ? { version: r.latest.version, url: r.latest.url } : null;
+        }).catch(function () { return null; });
+      }
+      var repo = opts.repo || "feibixunchang/easynote";
+      var re = channel === "mobile" ? MOBILE_TAG_RE : DESKTOP_TAG_RE;
+      return fetchGithubTags(repo).then(function (tags) {
+        var v = pickMaxVersion(tags, re);
+        if (!v) return null;
+        return {
+          version: v,
+          url: "https://github.com/" + repo + "/releases/tag/" + (channel === "mobile" ? "mobile-v" : "v") + v,
+        };
+      });
     },
   };
 

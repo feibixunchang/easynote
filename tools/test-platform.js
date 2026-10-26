@@ -119,6 +119,74 @@ function loadWith(win) {
       typeof EZ.bridge.pickImage === "undefined" && typeof EZ.bridge.startUpdate === "undefined");
   }
 
+  console.log("\n【4】能力开关 + 选图 / 分享 / 导出 / 更新检查");
+  {
+    // —— 浏览器：不支持选图，分享回退复制，导出走下载，更新检查看 v* 标签 ——
+    const calls = [];
+    const win = {
+      setTimeout: setTimeout, clearTimeout: clearTimeout, console: console,
+      navigator: { clipboard: { writeText: (t) => { calls.push("copy:" + t); return Promise.resolve(); } } },
+      open: function () {},
+      document: { createElement: () => ({ style: {}, setAttribute(){}, click(){ calls.push("download"); }, remove(){} }),
+                  body: { appendChild(){}, removeChild(){} }, execCommand: () => true },
+      Blob: function () {}, URL: { createObjectURL: () => "blob:x", revokeObjectURL(){} },
+      fetch: function (url) {
+        calls.push("fetch:" + url);
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([
+          { tag_name: "v1.2.30" }, { tag_name: "mobile-v1.0.21" }, { tag_name: "v1.2.9" }, { tag_name: "v1.3.0" },
+        ]) });
+      },
+    };
+    const EZ = loadWith(win);
+    ok("浏览器：不支持选图", EZ.capabilities.pickImage === false);
+    ok("浏览器：支持导出（下载）", EZ.capabilities.saveFile === true);
+    ok("浏览器：没有桌面专属能力（revealFile/webdav）",
+      EZ.capabilities.revealFile === false && EZ.capabilities.webdav === false);
+    await EZ.shareText({ title: "t", text: "分享文本" });
+    ok("浏览器没有 Web Share 时回退复制", calls.indexOf("copy:分享文本") !== -1);
+    const info = await EZ.checkLatestVersion({ channel: "desktop" });
+    ok("网页版更新检查只看 v* 标签并取最大版本", info && info.version === "1.3.0", JSON.stringify(info));
+    ok("更新链接指向对应 release tag", info && info.url.indexOf("/releases/tag/v1.3.0") !== -1);
+    const infoM = await EZ.checkLatestVersion({ channel: "mobile" });
+    ok("移动端更新检查只看 mobile-v* 标签", infoM && infoM.version === "1.0.21", JSON.stringify(infoM));
+  }
+
+  console.log("\n【5】移动端：选图 / 导出 / 分享 走 Capacitor 插件");
+  {
+    const calls = [];
+    const win = {
+      setTimeout: setTimeout, clearTimeout: clearTimeout, console: console,
+      navigator: { userAgent: "iPhone" },
+      // 简易 Image 桩：设置 src 后立刻回调 onload（尺寸很小 → 压缩逻辑原样返回）
+      Image: function () {
+        const self = this;
+        Object.defineProperty(self, "src", { set: function () {
+          setTimeout(function () { self.naturalWidth = 10; self.naturalHeight = 10; if (self.onload) self.onload(); }, 0);
+        } });
+      },
+      document: { createElement: () => ({ getContext: () => ({ drawImage(){} }), toDataURL: () => "data:image/jpeg;base64,SMALL" }) },
+      Capacitor: {
+        isNativePlatform: () => true, getPlatform: () => "ios",
+        Plugins: {
+          Camera: { getPhoto: function (o) { calls.push("camera:" + o.source); return Promise.resolve({ dataUrl: "data:image/jpeg;base64,BBB" }); } },
+          Filesystem: { writeFile: function (o) { calls.push("fs:" + o.path); return Promise.resolve({ uri: "file:///cache/" + o.path }); } },
+          Share: { share: function (o) { calls.push("share:" + (o.url || o.text)); return Promise.resolve(); } },
+        },
+      },
+    };
+    const EZ = loadWith(win);
+    ok("移动端：支持选图", EZ.capabilities.pickImage === true);
+    const img = await EZ.pickImage({ source: "camera" });
+    ok("选图 → Camera 插件（拍照来源正确）", calls.indexOf("camera:camera") !== -1);
+    ok("选图返回内嵌 dataUrl 与文件名", !!(img && img.dataUrl && img.name), JSON.stringify(img && img.name));
+    const r = await EZ.exportText({ defaultName: "b.json", content: "{}" });
+    ok("导出 → 写缓存目录 + 拉起系统分享", calls.indexOf("fs:b.json") !== -1 && calls.some((c) => String(c).indexOf("share:") === 0), JSON.stringify(calls.slice(-2)));
+    ok("导出返回 ok", r && r.ok === true);
+    await EZ.shareText({ title: "笔记", text: "内容" });
+    ok("分享 → Share 插件", calls.some((c) => c === "share:内容"));
+  }
+
+
   console.log("\n────────────────────────");
   console.log("通过 " + pass + " 项，失败 " + fail + " 项");
   process.exit(fail ? 1 : 0);

@@ -1001,6 +1001,10 @@
 
   // 复制文本：桌面端走主进程 clipboard（三端 100% 可靠）；网页端退回 navigator.clipboard / execCommand
   function copyText(text) {
+    // 统一走平台适配层（shared/platform.js）：桌面 Electron 剪贴板 / 浏览器 clipboard（含兜底）
+    if (typeof EZPlatform !== "undefined" && EZPlatform && EZPlatform.copyText) {
+      try { EZPlatform.copyText(text); return; } catch (e) {}
+    }
     var api = window.electronAPI;
     if (api && api.writeClipboard) {
       api
@@ -1107,29 +1111,18 @@
     var name = safeFileName(noteCaption(note)) + ".md";
     var text = String(note.content || "").replace(/\r\n/g, "\n");
     if (text && !/\n$/.test(text)) text += "\n"; // 补末尾换行，符合文本文件习惯
-    var api = window.electronAPI;
-    if (api && api.saveFile) {
-      api
-        .saveFile({ defaultName: name, content: text, filters: [{ name: "Markdown", extensions: ["md"] }] })
-        .then(function (r) {
-          if (r && r.ok) toast("已导出 Markdown");
-          else if (r && r.canceled) { /* 用户取消，不必打扰 */ }
-          else toast("导出失败" + (r && r.error ? "：" + r.error : ""));
-        })
-        .catch(function () {
-          toast("导出失败");
-        });
-      return;
-    }
-    var blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
-    toast("已导出 " + name);
+    // 平台适配层：桌面弹保存对话框 / 手机拉起分享与保存 / 网页版直接下载
+    // （以前网页版这里是"点了没反应"——只认 electronAPI）
+    EZPlatform.saveTextFile({
+      defaultName: name,
+      content: text,
+      mime: "text/markdown",
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    }).then(function (r) {
+      if (r && r.ok) toast("已导出 Markdown");
+      else if (r && r.canceled) { /* 用户取消，不打扰 */ }
+      else toast("导出失败" + (r && r.error ? "：" + r.error : ""));
+    }).catch(function () { toast("导出失败"); });
   }
 
   var MD_RE = /\.(md|markdown|mdown|mkd|txt)$/i;
@@ -2531,10 +2524,13 @@
   function insertImage() {
     var note = currentNote();
     if (!note || note.deleted) return;
-    var api = window.electronAPI;
-    if (!api || !api.pickImage) { toast("当前环境不支持选择图片"); return; }
+    // 选图与能力判断都走适配层：桌面=系统对话框（内嵌/引用两种模式），移动=相机/相册，浏览器不支持
+    if (!(typeof EZPlatform !== "undefined" && EZPlatform && EZPlatform.capabilities && EZPlatform.capabilities.pickImage)) {
+      toast("当前环境不支持选择图片");
+      return;
+    }
     var mode = state.imageMode === "path" ? "path" : "embed";
-    api.pickImage(mode).then(function (r) {
+    EZPlatform.pickImage({ mode: mode }).then(function (r) {
       if (!r) return;
       var name = r.name || "图片";
       var url;
@@ -3026,7 +3022,21 @@
 
     // 点击版本徽标 → 手动检查更新，结果明确可见（不再静默重置）
     function manualCheck() {
-      if (!api.checkUpdate) return;
+      if (!api.checkUpdate) {
+        // 网页版没有主进程：直接走平台适配层查 GitHub 标签（桌面用 v*，手机用 mobile-v*）
+        if (typeof EZPlatform !== "undefined" && EZPlatform && EZPlatform.checkLatestVersion) {
+          if (badge) badge.textContent = "检查中…";
+          EZPlatform.checkLatestVersion({ channel: "desktop" }).then(function (info) {
+            if (badge) badge.textContent = appVersion ? "v" + appVersion : "版本";
+            if (info && info.version) showUpdate(info);
+            else showBanner("✓ 已是最新版本" + (appVersion ? " v" + appVersion : ""), null, null, 4000);
+          }).catch(function () {
+            if (badge) badge.textContent = appVersion ? "v" + appVersion : "版本";
+            showBanner("检查更新失败：网络不可达", "重试", manualCheck, 15000);
+          });
+        }
+        return;
+      }
       if (badge) badge.textContent = "检查中…";
       api.checkUpdate().then(function (r) {
         api.getAppVersion().then(function (v) {
