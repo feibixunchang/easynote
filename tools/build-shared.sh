@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
 # 共享核心 + 平台适配层：两份都要复制到移动端与网页版目录
-SRCS=("shared/core.js" "shared/platform.js")
+SRCS=("shared/core.js" "shared/platform.js" "shared/lock.js")
 DIRS=("mobile/www/shared" "server/web/shared")
 
 for SRC in "${SRCS[@]}"; do

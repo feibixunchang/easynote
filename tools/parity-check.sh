@@ -129,6 +129,29 @@ else
 fi
 
 # platform.js（平台适配层）同样三端一致
+# lock.js（密码解锁）同样三端一致
+if [ -f "shared/lock.js" ]; then
+  for d in mobile/www/shared/lock.js server/web/shared/lock.js; do
+    if [ -f "$d" ] && diff -q "shared/lock.js" "$d" >/dev/null 2>&1; then
+      echo "  ✓ $d 与 shared/lock.js 一致"
+    else
+      echo "  ✗ $d 缺失或与 shared/lock.js 不一致（运行 bash tools/build-shared.sh）"
+      fail=1
+    fi
+  done
+  for h in index.html mobile/www/index.html server/web/index.html; do
+    if grep -q 'shared/lock.js' "$h"; then
+      echo "  ✓ $h 已引入 shared/lock.js"
+    else
+      echo "  ✗ $h 未引入 shared/lock.js（必须排在 app.js 之前）"
+      fail=1
+    fi
+  done
+else
+  echo "  ✗ 找不到 shared/lock.js"
+  fail=1
+fi
+
 if [ -f "shared/platform.js" ]; then
   for d in mobile/www/shared/platform.js server/web/shared/platform.js; do
     if [ -f "$d" ] && diff -q "shared/platform.js" "$d" >/dev/null 2>&1; then

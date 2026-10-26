@@ -17,7 +17,7 @@ cd "$ROOT" || exit 1
 fail=0
 
 echo "== 1/3 语法检查 =="
-for f in app.js mobile/www/app.js server/web/app.js shared/core.js shared/platform.js main.js preload.js updater.js server/server.js server/test-sync.js tools/test-core.js tools/test-platform.js; do
+for f in app.js mobile/www/app.js server/web/app.js shared/core.js shared/platform.js shared/lock.js main.js preload.js updater.js server/server.js server/test-sync.js tools/test-core.js tools/test-platform.js tools/test-lock.js; do
   if node --check "$f" >/dev/null 2>&1; then
     echo "   ✓ $f"
   else
@@ -57,6 +57,15 @@ fi
 echo ""
 echo "== 平台适配层单元测试（桌面/移动/浏览器 三条路）=="
 if node tools/test-platform.js | tail -3; then
+  echo "   ✓ 通过"
+else
+  echo "   ✗ 未通过"
+  fail=1
+fi
+
+echo ""
+echo "== 密码解锁单元测试 =="
+if node tools/test-lock.js | tail -3; then
   echo "   ✓ 通过"
 else
   echo "   ✗ 未通过"

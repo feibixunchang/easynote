@@ -1480,6 +1480,46 @@
     });
 
     el.settingsClose.addEventListener("click", function () { el.settingsModal.hidden = true; });
+
+    // ---------------- 密码解锁（shared/lock.js）----------------
+    function refreshLockUI() {
+      if (typeof EZLock === "undefined" || !EZLock) return;
+      var on = EZLock.isEnabled();
+      var st = document.getElementById("lockState");
+      if (st) st.textContent = on ? ("已开启（" + EZLock.pinLength() + " 位数字）") : "未开启";
+      var setup = document.getElementById("btnLockSetup");
+      var now = document.getElementById("btnLockNow");
+      var off = document.getElementById("btnLockOff");
+      if (setup) setup.textContent = on ? "修改密码" : "设置密码";
+      if (now) now.hidden = !on;
+      if (off) off.hidden = !on;
+    }
+    var lockSetupBtn = document.getElementById("btnLockSetup");
+    if (lockSetupBtn) {
+      lockSetupBtn.addEventListener("click", function () {
+        EZLock.setup({ onDone: function () { refreshLockUI(); toast("密码已保存，下次打开需要输入"); } });
+      });
+    }
+    var lockNowBtn = document.getElementById("btnLockNow");
+    if (lockNowBtn) {
+      lockNowBtn.addEventListener("click", function () {
+        el.settingsModal.hidden = true;
+        EZLock.lockNow();
+      });
+    }
+    var lockOffBtn = document.getElementById("btnLockOff");
+    if (lockOffBtn) {
+      lockOffBtn.addEventListener("click", function () {
+        if (window.confirm("关闭密码解锁？\n\n笔记不受影响，但打开应用时不再需要输入密码。")) {
+          EZLock.disable();
+          refreshLockUI();
+          toast("已关闭密码解锁");
+        }
+      });
+    }
+    refreshLockUI();
+
+
     el.settingsModal.addEventListener("click", function (e) {
       if (e.target === el.settingsModal) el.settingsModal.hidden = true;
     });
@@ -2752,9 +2792,20 @@
     }
   }
 
+  // 密码锁屏：已设置密码时先显示锁屏，解锁后再继续初始化
+  // （这样笔记内容不会在解锁前渲染出来）
   function init() {
     cacheDom();
     load();
+    if (typeof EZLock !== "undefined" && EZLock && EZLock.isEnabled()) {
+      EZLock.requireUnlock(function () { continueInit(); });
+      return;
+    }
+    continueInit();
+  }
+
+  // 真正的初始化（原 init 主体）
+  function continueInit() {
     filterPurged(); // 启动即过滤墓碑，防止已删笔记复活
     // 回收站自动清理（默认关闭）：只在启动时跑一次，超过设定天数的直接永久删除
     var autoPurged = autoPurgeTrash();

@@ -213,6 +213,14 @@
         <button id="btnDavTest">测试连接</button>
         <button id="btnDavExport" class="primary">导出到 WebDAV</button>
       </div>
+      <p class="modal-sub" style="margin-top:12px"><b>🔒 密码解锁</b></p>
+      <p class="modal-sub" style="margin-top:-4px" id="lockState">未开启</p>
+      <p class="modal-sub" style="margin-top:-4px">设置 4~6 位数字密码，打开应用时先解锁再显示笔记。这只是「防止别人随手翻看」的锁，<b>不加密本地数据</b>。</p>
+      <div class="modal-actions" style="text-align:left">
+        <button id="btnLockSetup" class="primary">设置密码</button>
+        <button id="btnLockNow" hidden>立即锁定</button>
+        <button id="btnLockOff" hidden>关闭密码</button>
+      </div>
       <div class="modal-actions">
         <button id="settingsClose">关闭</button>
       </div>
@@ -314,6 +322,7 @@
 
   <script src="shared/core.js"></script>
   <script src="shared/platform.js"></script>
+  <script src="shared/lock.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

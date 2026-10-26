@@ -168,6 +168,17 @@
       </div>
 
       <div class="set-group">
+        <div class="set-group-title">🔒 密码解锁</div>
+        <p class="set-hint">设置 <b>4~6 位数字密码</b>，打开应用时先解锁再显示笔记。这只是「防止别人随手翻看」的锁，<b>不加密本地数据</b>。</p>
+        <div class="set-line" id="lockState">未开启</div>
+        <div class="set-btns">
+          <button class="btn primary" id="btnLockSetup">设置密码</button>
+          <button class="btn" id="btnLockNow" hidden>立即锁定</button>
+          <button class="btn" id="btnLockOff" hidden>关闭密码</button>
+        </div>
+      </div>
+
+      <div class="set-group">
         <div class="set-group-title">💾 数据</div>
         <label class="set-field"><span>回收站自动清理</span>
           <select id="trashDaysSelect">
@@ -273,6 +284,7 @@
 
   <script src="shared/core.js"></script>
   <script src="shared/platform.js"></script>
+  <script src="shared/lock.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

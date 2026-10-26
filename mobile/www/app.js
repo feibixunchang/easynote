@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.23";
+  var APP_VERSION = "1.0.24";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -2120,6 +2120,46 @@
     el.noteList.addEventListener("scroll", closeOpenSwipe, { passive: true });
     el.btnBack.addEventListener("click", goList);
     el.btnSettingsBack.addEventListener("click", goList);
+
+    // ---------------- 密码解锁（shared/lock.js）----------------
+    function refreshLockUI() {
+      if (typeof EZLock === "undefined" || !EZLock) return;
+      var on = EZLock.isEnabled();
+      var st = document.getElementById("lockState");
+      if (st) st.textContent = on ? ("已开启（" + EZLock.pinLength() + " 位数字）") : "未开启";
+      var setup = document.getElementById("btnLockSetup");
+      var now = document.getElementById("btnLockNow");
+      var off = document.getElementById("btnLockOff");
+      if (setup) setup.textContent = on ? "修改密码" : "设置密码";
+      if (now) now.hidden = !on;
+      if (off) off.hidden = !on;
+    }
+    var lockSetupBtn = document.getElementById("btnLockSetup");
+    if (lockSetupBtn) {
+      lockSetupBtn.addEventListener("click", function () {
+        EZLock.setup({ onDone: function () { refreshLockUI(); toast("密码已保存，下次打开需要输入"); } });
+      });
+    }
+    var lockNowBtn = document.getElementById("btnLockNow");
+    if (lockNowBtn) {
+      lockNowBtn.addEventListener("click", function () {
+        goList();
+        EZLock.lockNow();
+      });
+    }
+    var lockOffBtn = document.getElementById("btnLockOff");
+    if (lockOffBtn) {
+      lockOffBtn.addEventListener("click", function () {
+        if (window.confirm("关闭密码解锁？\n\n笔记不受影响，但打开应用时不再需要输入密码。")) {
+          EZLock.disable();
+          refreshLockUI();
+          toast("已关闭密码解锁");
+        }
+      });
+    }
+    refreshLockUI();
+
+
     el.btnTheme.addEventListener("click", function () {
       setThemeMode(state.dark ? "light" : "dark");
     });
@@ -2375,9 +2415,20 @@
     }
   }
 
+  // 密码锁屏：已设置密码时先显示锁屏，解锁后再继续初始化
+  // （这样笔记内容不会在解锁前渲染出来）
   function init() {
     cacheDom();
     load();
+    if (typeof EZLock !== "undefined" && EZLock && EZLock.isEnabled()) {
+      EZLock.requireUnlock(function () { continueInit(); });
+      return;
+    }
+    continueInit();
+  }
+
+  // 真正的初始化（原 init 主体）
+  function continueInit() {
     filterPurged();
     var autoPurged = autoPurgeTrash(); // 回收站自动清理（默认关闭）
     applySettings();
