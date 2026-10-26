@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.22";
+  var APP_VERSION = "1.0.23";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -858,9 +858,10 @@
         '<button data-action="pin" class="' + (note.pinned ? "active" : "") + '" title="置顶 / 取消置顶">📌</button>' +
         '<button data-action="color" class="' + (note.color ? "active" : "") + '" title="设置颜色标签">●</button>' +
         '<button data-action="markdown" class="' + (note.markdown ? "active" : "") + '" title="开启 / 关闭 Markdown">M↓</button>' +
+        // 拍照/相册放在靠前位置：手机上工具栏是横向滚动的，原来排在第 7 位经常被挤出屏幕看不见
+        '<button data-action="insertImage" title="插入图片（拍照 / 相册）">🖼</button>' +
         '<button data-action="preview" class="' + (state.preview ? "active" : "") + '" title="预览" ' + (note.markdown ? "" : "disabled") + ">👁</button>" +
         '<button data-action="insertText" title="插入文本（引用/代码/分隔线/日期）">文</button>' +
-        '<button data-action="insertImage" title="插入图片（拍照 / 相册）">🖼</button>' +
         '<button data-action="insertLink" title="插入链接">🔗</button>' +
         '<button data-action="info" title="笔记信息">ⓘ</button>' +
         '<button data-action="share" title="分享 / 复制">↗</button>' +
@@ -1271,6 +1272,7 @@
     var note = currentNote();
     if (!note) return;
     showSheet(getTitle(note), [
+      { label: "📷 拍照 / 🖼 从相册插入图片", action: function () { openImageSourceSheet(); } },
       { label: "复制内容到剪贴板", action: function () { copyText(note.content); toast("已复制笔记内容"); } },
       { label: "分享", action: function () { shareNote(note); } },
       { label: "笔记信息", action: function () { showInfo(note); } },
@@ -1568,17 +1570,33 @@
     var note = currentNote();
     if (!note || note.deleted) return;
     var camera = plugin("Camera");
-    if (!camera || !camera.getPhoto) { toast("当前环境不支持选择图片"); return; }
+    if (!camera || !camera.getPhoto) {
+      toast("当前环境不支持选择图片（相机插件未就绪）");
+      return;
+    }
     showSheet("插入图片", [
-      {
-        label: "📷 拍照",
-        action: function () { pickImage("camera"); },
-      },
-      {
-        label: "🖼 从相册选择",
-        action: function () { pickImage("photos"); },
-      },
+      { label: "📷 拍照", action: function () { requestAndPickImage("camera"); } },
+      { label: "🖼 从相册选择", action: function () { requestAndPickImage("photos"); } },
     ]);
+  }
+
+  // 先申请权限再取图：被拒绝时给出明确指引。
+  // （以前直接 getPhoto，权限被拒/插件未就绪时只是"插不进来"，看起来像没有这个功能）
+  function requestAndPickImage(source) {
+    var camera = plugin("Camera");
+    var want = source === "camera" ? { permissions: ["camera"] } : { permissions: ["photos"] };
+    var go = function () { pickImage(source); };
+    if (!camera || !camera.requestPermissions) return go();
+    Promise.resolve(camera.requestPermissions(want)).then(function (st) {
+      st = st || {};
+      var denied = (source === "camera" && st.camera === "denied") ||
+        (source === "photos" && st.photos === "denied");
+      if (denied) {
+        toast("没有" + (source === "camera" ? "相机" : "照片") + "权限：请到「设置 → 简易笔记」里允许后重试");
+        return;
+      }
+      go();
+    }).catch(function () { go(); }); // 个别平台不支持 requestPermissions → 直接尝试取图
   }
   function pickImage(source) {
     var note = currentNote();

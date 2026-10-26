@@ -434,6 +434,31 @@ function createWindow() {
   return win;
 }
 
+/* ============ 强制退出（托盘「退出」/ 更新安装 都用它）============
+ * Windows 上出现过"托盘右键退出没反应、退不掉"：退出链路依赖窗口 close 事件放行，
+ * 一旦窗口或托盘把这次关闭拦下，进程就会赖着不走（托盘图标还在）。
+ * 这里按层拆掉所有"牵挂"，最后再留一个兜底：1.5 秒后仍未退出就直接结束进程，
+ * 保证"点了退出就一定能退出"。 */
+function forceQuit(reason) {
+  try { closeLog("退出请求：" + (reason || "")); } catch (e) {}
+  app.isQuitting = true;
+  try {
+    if (tray && !tray.isDestroyed()) tray.destroy();
+    tray = null;
+  } catch (e) {}
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      // 先摘掉 close 拦截，避免 handleCloseRequest 又把这次关闭拦下来
+      mainWindow.removeAllListeners("close");
+      mainWindow.destroy();
+    }
+  } catch (e) {}
+  try { app.quit(); } catch (e) {}
+  setTimeout(function () {
+    try { app.exit(0); } catch (e) {}
+  }, 1500);
+}
+
 /* ============ 关闭请求的统一处理 ============ */
 // Windows 1.2.20 反馈："最小化和最大化都好使，只有关闭 ✕ 不好使"。
 // 关键线索：最小化/最大化由系统原生覆盖层直接处理、根本不经过 JS，
@@ -647,8 +672,8 @@ function buildTrayMenu() {
     {
       label: "退出",
       click: function () {
-        app.isQuitting = true;
-        app.quit();
+        // 多层兜底（Windows 上曾出现"点了退出没反应"）
+        forceQuit("托盘菜单");
       },
     },
   ];

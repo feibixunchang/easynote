@@ -353,50 +353,74 @@ function installMac(dmgPath) {
 function installLinux(filePath, name) {
   const appImage = process.env.APPIMAGE;
   const isAppImage = /\.AppImage$/i.test(name);
-  return new Promise(function (resolve) {
-    if (isAppImage && appImage) {
-      // AppImage：等我们退出后再覆盖本体（运行中的文件正在被 mmap，边跑边覆盖有风险），
-      // 覆盖成功后自动启动新版本；没有写权限时退回 pkexec（必须 detached）。
+  const isDeb = /\.deb$/i.test(name);
+
+  // 提权执行 + 检查结果：以前直接 spawn pkexec 不看返回 —— 授权被取消/无 polkit 时
+  // 会"静默失败"（应用退出了，却什么都没发生，用户只能自己去发布页重下）。
+  const runPrivileged = function (args, okMsg, failMsg) {
+    return new Promise(function (resolve) {
+      let settled = false;
+      const done = function (ok, message) {
+        if (settled) return;
+        settled = true;
+        resolve(ok ? { ok: true, message: message || okMsg } : { ok: false, error: "pkexec failed", message: message || failMsg });
+      };
+      let child;
+      try {
+        child = spawn("pkexec", args, { detached: true, stdio: "ignore" });
+      } catch (e) {
+        return done(false, failMsg);
+      }
+      child.on("error", function () { done(false, "系统没有可用的安装器，也没有 pkexec。" + failMsg); });
+      child.on("exit", function (code) {
+        if (code && code !== 0) done(false, "提权安装被取消或失败（code " + code + "）。" + failMsg);
+        else done(true);
+      });
+      // 1.2 秒没退出 → 认为授权框/安装流程已经开始（pkexec 会一直等到安装结束）
+      setTimeout(function () { done(true); }, 1200);
+      try { child.unref(); } catch (e) {}
+    });
+  };
+
+  // ① 正在以 AppImage 运行：等我们退出后覆盖本体并自动启动（先确认有写权限，
+  //    没写权限就**不要**先退出应用，改走下面的授权流程）
+  if (isAppImage && appImage) {
+    try {
+      fs.accessSync(appImage, fs.constants.W_OK);
       const cmd = "cp -f " + shellQuote(filePath) + " " + shellQuote(appImage)
         + " && chmod 755 " + shellQuote(appImage)
         + " && (" + shellQuote(appImage) + " >/dev/null 2>&1 &)";
-      try {
-        spawnAfterExitPosix(cmd).unref();
-        resolve({ ok: true, message: "应用即将退出，新版本会自动覆盖并启动" });
-        return;
-      } catch (e) { /* 退回 pkexec */ }
-      const child = spawn("pkexec",
-        ["/bin/sh", "-c", "cp -f " + shellQuote(filePath) + " " + shellQuote(appImage) + " && chmod 755 " + shellQuote(appImage)],
-        { detached: true, stdio: "ignore" });
-      child.on("error", function () {
-        try { shell.openPath(filePath); } catch (x) {}
-        resolve({ ok: false, error: "无权限替换 AppImage", message: "已为你打开新版本安装包，请手动替换后重启" });
-      });
-      child.on("spawn", function () {
-        child.unref();
-        resolve({ ok: true, message: "已请求管理员授权，替换完成后请手动重启应用" });
+      spawnAfterExitPosix(cmd).unref();
+      return Promise.resolve({ ok: true, message: "应用即将退出，新版本会自动覆盖并启动" });
+    } catch (e) {
+      // 无写权限 → 用 pkexec 复制替换（并检查结果）
+      return runPrivileged(
+        ["/bin/sh", "-c", "cp -f " + shellQuote(filePath) + " " + shellQuote(appImage)
+          + " && chmod 755 " + shellQuote(appImage)],
+        "已请求管理员授权替换，替换完成后请手动重启应用",
+        "已为你保留安装包，可手动替换后重启。"
+      );
+    }
+  }
+
+  // ② deb / rpm：首选交给系统「软件安装器」打开 —— 有可见的安装界面，
+  //    且它是独立进程，不会出现"应用退出了但什么都没发生"
+  const args = isDeb ? ["dpkg", "-i", filePath] : ["rpm", "-i", filePath];
+  return new Promise(function (resolve) {
+    let opened = "";
+    try { opened = shell.openPath(filePath) || ""; } catch (e) { opened = String((e && e.message) || e); }
+    if (!opened) {
+      resolve({
+        ok: true,
+        message: "已用系统安装器打开安装包，请在弹出的窗口里点「安装」完成更新，装好后重新打开应用",
       });
       return;
     }
-    // deb / rpm：交给系统包管理器。pkexec 会弹授权框 —— 必须 detached，
-    // 否则应用一退出，授权框/安装进程会被一起终止（这正是"什么都没发生"的原因之一）。
-    const args = /\.deb$/i.test(name) ? ["dpkg", "-i", filePath] : ["rpm", "-i", filePath];
-    // 等我们退出后再装；pkexec 必须 detached，否则应用一退出就把授权框带走了
-    const child = spawn("pkexec",
-      ["/bin/sh", "-c", "while kill -0 " + process.pid + " 2>/dev/null; do sleep 0.2; done; exec \"$@\"", "sh"].concat(args),
-      { detached: true, stdio: "ignore" });
-    child.on("error", function () {
-      // 没有 pkexec（或策略拒绝）→ 交给系统"软件安装器"打开安装包
-      try { shell.openPath(filePath); } catch (x) {}
-      resolve({ ok: false, error: "未找到 pkexec", message: "已用系统安装器打开安装包，请按提示完成安装" });
-    });
-    child.on("spawn", function () {
-      child.unref();
-      resolve({ ok: true, message: "已请求管理员授权安装，完成后请重新打开应用" });
-    });
+    // ③ 系统没有关联安装器 → 退回 pkexec（并检查结果，失败就不退出应用，给出手动出口）
+    runPrivileged(args, "已请求管理员授权安装，完成后请重新打开应用",
+      "安装包已下载完成，可手动安装（点「打开文件夹」）。").then(resolve);
   });
 }
-
 function startInstall(name, filePath) {
   try {
     if (process.platform === "win32") return Promise.resolve(installWin(filePath));
