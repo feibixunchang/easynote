@@ -113,7 +113,7 @@ if [ "$VER" != "未知" ] && [ -f "$PBX" ]; then
     else
       sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $VER;/g; s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $NEW_BV;/g" "$PBX"
     fi
-    say "==> iOS 工程版本号已同步：$CUR_MV → $VER（构建号 $CUR_BV → $NEW_BV）"
+    say "==> iOS 工程版本号已同步：${CUR_MV} → ${VER}（构建号 ${CUR_BV} → ${NEW_BV}）"
   fi
 fi
 
