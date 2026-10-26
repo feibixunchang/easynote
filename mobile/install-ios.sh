@@ -90,6 +90,28 @@ if [ "$VER" != "未知" ] && ! grep -q "APP_VERSION = \"$VER\"" "$PUB/app.js" 2>
   exit 1
 fi
 
+# ------------------------------------------------ 2.5 同步 iOS 工程版本号
+# 踩过的坑：只改了 mobile/package.json（以及 www/app.js 的 APP_VERSION），
+# 但 iOS 上显示的版本来自 Xcode 工程的 MARKETING_VERSION —— 结果手机上看到的还是旧版本号。
+# 这里自动对齐：MARKETING_VERSION ← package.json 的版本；版本变化时构建号 +1。
+PBX="mobile/ios/App/App.xcodeproj/project.pbxproj"
+if [ "$VER" != "未知" ] && [ -f "$PBX" ]; then
+  CUR_MV="$(grep -m1 'MARKETING_VERSION' "$PBX" | sed 's/.*MARKETING_VERSION = //; s/;.*//; s/^[[:space:]]*//')"
+  CUR_BV="$(grep -m1 'CURRENT_PROJECT_VERSION' "$PBX" | sed 's/.*CURRENT_PROJECT_VERSION = //; s/;.*//; s/^[[:space:]]*//')"
+  if [ "$CUR_MV" != "$VER" ]; then
+    case "$CUR_BV" in
+      ''|*[!0-9]*) NEW_BV="1" ;;
+      *) NEW_BV=$((CUR_BV + 1)) ;;
+    esac
+    if sed --version >/dev/null 2>&1; then
+      sed -i "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $VER;/g; s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $NEW_BV;/g" "$PBX"
+    else
+      sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $VER;/g; s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $NEW_BV;/g" "$PBX"
+    fi
+    say "==> iOS 工程版本号已同步：$CUR_MV → $VER（构建号 $CUR_BV → $NEW_BV）"
+  fi
+fi
+
 # ---------------------------------------------------------------- 3. 找设备
 # devicectl 的 State 会随连接方式变化：available (paired) / connected / unavailable …
 # 之前只认 available，插着线显示 connected 时就找不到设备了 —— 这里放宽并排除无效状态。
