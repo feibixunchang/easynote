@@ -693,6 +693,8 @@ function toggleWindow() {
 /* ============ 版本号 / 更新检查 ============ */
 let latestRelease = null; // { version, url }
 let updateTimer = null;
+let updateFailCount = 0;   // 连续失败次数（决定下次重试间隔）
+let lastCheckOkAt = 0;     // 上次"检查成功"的时间（窗口聚焦时判断是否该补查）
 
 // 更新检查调度：成功后 6 小时再查；失败 10 分钟后重试（国内网络首次查不到时不会干等 6 小时）
 function scheduleUpdateCheck(delayMs) {
@@ -810,6 +812,8 @@ async function checkUpdate(manual) {
       url: "https://github.com/" + REPO_OWNER + "/" + REPO_NAME + "/releases/tag/v" + version,
     };
 
+    updateFailCount = 0;
+    lastCheckOkAt = Date.now();
     if (compareVersions(version, APP_VERSION) > 0) {
       refreshTrayMenu();
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -825,8 +829,12 @@ async function checkUpdate(manual) {
     scheduleUpdateCheck(6 * 60 * 60 * 1000);
     return { ok: true, hasUpdate: false };
   } catch (e) {
-    // 失败时把原因带回渲染端，界面明确提示（不再静默）；10 分钟后自动重试
-    scheduleUpdateCheck(10 * 60 * 1000);
+    // 失败时把原因带回渲染端，界面明确提示（不再静默）。
+    // 重试阶梯 30 秒 → 2 分钟 → 10 分钟：国内网络下首次检查常失败，
+    // 以前固定 10 分钟太久，用户会以为"根本不自动检查"。
+    updateFailCount++;
+    var ladder = [30 * 1000, 2 * 60 * 1000, 10 * 60 * 1000];
+    scheduleUpdateCheck(ladder[Math.min(updateFailCount - 1, ladder.length - 1)]);
     if (manual) notify("简易笔记", "检查更新失败，请稍后重试");
     return { ok: false, hasUpdate: false, error: String((e && e.message) || e) };
   }
@@ -879,6 +887,16 @@ ipcMain.handle("start-update", function (_e, version) {
     },
   });
   return { ok: true };
+});
+
+// 在文件管理器里定位"已下载好的安装包"（自动安装没起来时的手动出口）
+ipcMain.handle("reveal-file", function (_e, p) {
+  try {
+    if (typeof p === "string" && p) shell.showItemInFolder(p);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
 });
 
 ipcMain.handle("open-external", function (_e, url) {
@@ -1300,6 +1318,19 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     registerLocalFileProtocol();
     mainWindow = createWindow();
+    // 窗口每次"加载完成"都补推一次更新横幅：以前只在检查那一刻推，
+    // 若当时窗口没开/刚启动，用户就再也看不到提示（只能手动点"检查更新"）。
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.on("did-finish-load", function () {
+        if (hasNewVersion()) mainWindow.webContents.send("update-available", latestRelease);
+      });
+    }
+    // 窗口被重新打开/聚焦时，若距上次成功检查超过 30 分钟，顺手补查一次
+    ["focus", "show"].forEach(function (ev) {
+      mainWindow.on(ev, function () {
+        if (Date.now() - lastCheckOkAt > 30 * 60 * 1000) checkUpdate(false);
+      });
+    });
     buildMenu(mainWindow);
     createTray();
     // 启动 5 秒后静默检查一次更新；之后由 scheduleUpdateCheck 自动续期

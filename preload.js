@@ -58,6 +58,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
       cb(info);
     });
   },
+  revealFile: function (p) {
+    return ipcRenderer.invoke("reveal-file", p);
+  },
   startUpdate: function (version) {
     return ipcRenderer.invoke("start-update", version);
   },

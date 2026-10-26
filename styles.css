@@ -164,6 +164,8 @@ body.tb-custom .titlebar-strip { padding-right: 132px; }
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;            /* 侧栏窄时允许换行，避免进度条冲出边框 */
+  row-gap: 6px;
   margin: 0 10px 8px;
   padding: 7px 10px;
   border-radius: 6px;
@@ -207,7 +209,8 @@ body.tb-custom .titlebar-strip { padding-right: 132px; }
 /* 应用内更新进度：百分比 + 进度条 */
 .update-percent { font-size: 12px; font-weight: 600; color: var(--accent); flex: 0 0 auto; }
 .update-progress {
-  flex: 1 1 auto;
+  flex: 1 1 100%;             /* 进度条独占一行，绝不越界 */
+  max-width: 100%;
   height: 6px;
   border-radius: 3px;
   background: var(--bg);

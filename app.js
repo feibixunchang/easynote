@@ -2926,12 +2926,15 @@
         if (progressBar) progressBar.style.width = "0%";
         if (percentEl) percentEl.hidden = true;
       } else if (s.phase === "download") {
-        if (progressBar) progressBar.style.width = (s.percent || 0) + "%";
+        // 进度钳制在 0~100：以前直接把服务端/计算值写进 width，
+        // 出现 >100% 时进度条会冲出边框。
+        var pct = Math.max(0, Math.min(100, Math.round(Number(s.percent) || 0)));
+        if (progressBar) progressBar.style.width = pct + "%";
         if (percentEl) {
           percentEl.hidden = false;
           var mb = s.total ? (s.total / 1048576).toFixed(1) + "MB" : "";
           var spd = s.speedKbps ? (s.speedKbps >= 1024 ? (s.speedKbps / 1024).toFixed(1) + "MB/s" : s.speedKbps + "KB/s") : "";
-          percentEl.textContent = (s.percent || 0) + "%" + (spd ? " · " + spd : "");
+          percentEl.textContent = pct + "%" + (spd ? " · " + spd : "");
         }
         if (text) {
           text.textContent = "下载中" + (s.channel ? "（" + s.channel + "）" : "") + (mb ? " · " + mb : "");
@@ -2940,6 +2943,26 @@
         if (text) text.textContent = s.message || "下载完成，正在安装…";
         if (progress) progress.hidden = true;
         if (percentEl) percentEl.hidden = true;
+      } else if (s.phase === "manual") {
+        // 自动安装未能启动：绝不静默退出，给「打开文件夹」+「下载页」两个手动出口
+        downloading = false;
+        if (progress) progress.hidden = true;
+        if (percentEl) percentEl.hidden = true;
+        if (dismiss) dismiss.hidden = false;
+        if (text) text.textContent = s.message || "安装包已下载完成，请手动安装";
+        if (dl) {
+          dl.hidden = false;
+          dl.textContent = "下载页";
+          dl.onclick = function () { if (api.openExternal) api.openExternal(RELEASES_PAGE); };
+        }
+        if (pageBtn) {
+          pageBtn.hidden = false;
+          pageBtn.textContent = s.file ? "打开文件夹" : "下载页";
+          pageBtn.onclick = function () {
+            if (s.file && api.revealFile) api.revealFile(s.file);
+            else if (api.openExternal) api.openExternal(RELEASES_PAGE);
+          };
+        }
       } else if (s.phase === "error") {
         downloadFailed(s.message || "更新失败");
       }

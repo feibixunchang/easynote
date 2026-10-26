@@ -17,7 +17,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 const { execFile, spawn } = require("child_process");
-const { app } = require("electron");
+const { app, shell } = require("electron");
 
 const REPO_OWNER = "feibixunchang";
 const REPO_NAME = "easynote";
@@ -270,85 +270,116 @@ function downloadAsset(orderedUrls, dest, onProgress) {
   });
 }
 
-/* ============ 各平台安装（均会先关闭旧客户端再安装） ============ */
+/* ============ 各平台安装 ============
+ * 统一返回 Promise<{ ok, message?, error? }>：
+ *   ok=true  → 安装程序已交给系统（调用方随后退出应用，让安装器能替换正在运行的文件）
+ *   ok=false → 不要退出应用！把 message 回给界面，并给「打开文件夹 / 下载页」手动出口。
+ * 之前的问题：安装启动不可靠 + 失败也照样 app.exit(0) → 用户看到"进度条走完 → 应用自己关了 →
+ * 什么都没装"，只能自己去发布页重新下载。 */
+function quitSoon(ms) {
+  setTimeout(function () { app.exit(0); }, ms || 1800);
+}
 
 function installWin(filePath) {
-  // NSIS 安装向导会检查目标程序是否仍在运行。
-  // 做法：派一个独立的 cmd，等 2 秒（旧客户端此时已退出）再拉起安装向导，
-  // 这样向导不会弹"程序正在运行"。cmd 进程是 detached 的，父进程退出不影响它。
-  const q = '"' + String(filePath).replace(/"/g, '""') + '"';
-  const comspec = process.env.ComSpec || "cmd.exe";
-  let started = false;
+  // 优先用系统"打开方式"（ShellExecute）：.exe 自带的 UAC 清单由系统正确接管，
+  // 比自己拼 cmd 命令可靠；失败再退回 detached cmd（等旧客户端退出后再启动向导）。
   try {
+    const err = shell.openPath(filePath);
+    if (!err) return { ok: true, message: "安装向导已启动" };
+  } catch (e) { /* 继续尝试下面的方式 */ }
+  try {
+    const q = '"' + String(filePath).replace(/"/g, '""') + '"';
+    const comspec = process.env.ComSpec || "cmd.exe";
     spawn(comspec, ["/c", "ping -n 3 127.0.0.1 >nul && " + q], { detached: true, stdio: "ignore" }).unref();
-    started = true;
-  } catch (e) { started = false; }
-  if (!started) {
-    // 回退：直接启动安装向导（可能出现占用提示，手动关掉旧程序即可）
-    try { spawn(filePath, [], { detached: true, stdio: "ignore" }).unref(); } catch (e) {}
+    return { ok: true, message: "安装向导已启动" };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
   }
-  setTimeout(function () { app.exit(0); }, 200);
 }
 
 function installMac(dmgPath) {
-  execFile("hdiutil", ["attach", "-nobrowse", "-noautoopen", dmgPath], function (err, stdout) {
-    if (err) {
-      // 挂载失败：退而求其次，打开 dmg 让用户自己拖
-      try { execFile("open", [dmgPath]); } catch (e) {}
-      setTimeout(function () { app.exit(0); }, 600);
-      return;
-    }
-    const m = String(stdout).match(/\/Volumes\/[^\n]+/);
-    const mount = m ? m[0].trim() : null;
-    if (!mount) { try { execFile("open", [dmgPath]); } catch (e) {} app.exit(0); return; }
-    const srcApp = path.join(mount, "简易笔记.app");
-    const destApp = "/Applications/简易笔记.app";
-    // 正在运行的 app 是删不掉的（rm 会报 Text file busy），
-    // 所以替换动作必须发生在旧客户端退出之后 —— 交给一个独立的 shell 进程执行。
-    const plain = "rm -rf " + shellQuote(destApp) + " && cp -R " + shellQuote(srcApp) + " " + shellQuote(destApp);
-    const apple = 'do shell script ' + appleQuote(plain) + " with administrator privileges";
-    const script =
-      "sleep 2; " +
-      "(" + plain + ") 2>/dev/null || osascript -e " + shellQuote(apple) + "; " +
-      "hdiutil detach " + shellQuote(mount) + " -force >/dev/null 2>&1; " +
-      "open " + shellQuote(destApp) + " 2>/dev/null || open " + shellQuote(srcApp);
-    try { spawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" }).unref(); } catch (e) {}
-    setTimeout(function () { app.exit(0); }, 200);
+  return new Promise(function (resolve) {
+    execFile("hdiutil", ["attach", "-nobrowse", "-noautoopen", dmgPath], function (err, stdout) {
+      const fallbackOpen = function (why) {
+        // 挂载/拷贝失败也别静默：直接打开安装包，让用户拖进「应用程序」即可完成更新
+        try { shell.openPath(dmgPath); } catch (e) {}
+        resolve({ ok: false, error: why, message: "已为你打开安装包，请把「简易笔记」拖进「应用程序」完成更新" });
+      };
+      if (err) return fallbackOpen("dmg 挂载失败");
+      const m = String(stdout).match(/\/Volumes\/[^\n]+/);
+      const mount = m ? m[0].trim() : null;
+      if (!mount) return fallbackOpen("未找到挂载点");
+      const srcApp = path.join(mount, "简易笔记.app");
+      const destApp = "/Applications/简易笔记.app";
+      // 旧客户端必须先退出才能替换（运行中的 app 删不掉），交给独立 shell 延迟执行
+      const plain = "rm -rf " + shellQuote(destApp) + " && cp -R " + shellQuote(srcApp) + " " + shellQuote(destApp);
+      const apple = 'do shell script ' + appleQuote(plain) + " with administrator privileges";
+      const script =
+        "sleep 1; " +
+        "(" + plain + ") 2>/dev/null || osascript -e " + shellQuote(apple) + "; " +
+        "hdiutil detach " + shellQuote(mount) + " -force >/dev/null 2>&1; " +
+        "open " + shellQuote(destApp) + " 2>/dev/null || open " + shellQuote(srcApp);
+      try {
+        spawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" }).unref();
+        resolve({ ok: true, message: "正在安装（可能弹出管理员授权）" });
+      } catch (e) {
+        resolve({ ok: false, error: String((e && e.message) || e) });
+      }
+    });
   });
 }
 
 function installLinux(filePath, name) {
   const appImage = process.env.APPIMAGE;
-  if (/\.AppImage$/i.test(name) && appImage) {
-    // 直接覆盖当前 AppImage 文件后重启（AppImage 运行时是解包后的副本，覆盖本体安全）
-    fs.copyFile(filePath, appImage, function (e) {
-      if (e) {
-        execFile("pkexec", ["cp", "-f", filePath, appImage], function (e2) {
-          if (e2) { try { execFile("xdg-open", [filePath]); } catch (x) {} return app.exit(0); }
-          relaunchAppImage(appImage);
+  const isAppImage = /\.AppImage$/i.test(name);
+  return new Promise(function (resolve) {
+    if (isAppImage && appImage) {
+      // AppImage：直接覆盖本体（运行的其实是解包副本），再重启
+      fs.copyFile(filePath, appImage, function (e) {
+        if (!e) {
+          fs.chmod(appImage, 0o755, function () {
+            relaunchAppImage(appImage);
+            resolve({ ok: true, message: "新版本已就位，正在重启应用" });
+          });
+          return;
+        }
+        // 无写权限：走 pkexec（必须 detached，否则我们退出后授权框会被一起带走）
+        const child = spawn("pkexec", ["cp", "-f", filePath, appImage], { detached: true, stdio: "ignore" });
+        child.on("error", function () {
+          try { shell.openPath(filePath); } catch (x) {}
+          resolve({ ok: false, error: "无权限替换 AppImage", message: "已为你打开新版本安装包，请手动替换后重启" });
         });
-        return;
-      }
-      fs.chmod(appImage, 0o755, function () { relaunchAppImage(appImage); });
+        child.on("spawn", function () {
+          child.unref();
+          resolve({ ok: true, message: "已请求管理员授权，替换完成后请手动重启应用" });
+        });
+      });
+      return;
+    }
+    // deb / rpm：交给系统包管理器。pkexec 会弹授权框 —— 必须 detached，
+    // 否则应用一退出，授权框/安装进程会被一起终止（这正是"什么都没发生"的原因之一）。
+    const args = /\.deb$/i.test(name) ? ["dpkg", "-i", filePath] : ["rpm", "-i", filePath];
+    const child = spawn("pkexec", args, { detached: true, stdio: "ignore" });
+    child.on("error", function () {
+      // 没有 pkexec（或策略拒绝）→ 交给系统"软件安装器"打开安装包
+      try { shell.openPath(filePath); } catch (x) {}
+      resolve({ ok: false, error: "未找到 pkexec", message: "已用系统安装器打开安装包，请按提示完成安装" });
     });
-    return;
+    child.on("spawn", function () {
+      child.unref();
+      resolve({ ok: true, message: "已请求管理员授权安装，完成后请重新打开应用" });
+    });
+  });
+}
+
+function startInstall(name, filePath) {
+  try {
+    if (process.platform === "win32") return Promise.resolve(installWin(filePath));
+    if (process.platform === "darwin") return installMac(filePath);
+    return installLinux(filePath, name);
+  } catch (e) {
+    return Promise.resolve({ ok: false, error: String((e && e.message) || e) });
   }
-  // deb / rpm：交给系统包管理器（需密码），装完退出，用户自行重开
-  const args = /\.deb$/i.test(name) ? ["dpkg", "-i", filePath] : ["rpm", "-i", filePath];
-  try { execFile("pkexec", args, function () {}); } catch (e) {}
-  setTimeout(function () { app.exit(0); }, 400);
-}
-
-function relaunchAppImage(appImage) {
-  try { spawn(appImage, [], { detached: true, stdio: "ignore" }).unref(); } catch (e) {}
-  setTimeout(function () { app.exit(0); }, 500);
-}
-
-function installAsset(name, filePath) {
-  const platform = process.platform;
-  if (platform === "win32") return installWin(filePath);
-  if (platform === "darwin") return installMac(filePath);
-  return installLinux(filePath, name);
 }
 
 /* ============ 入口：检测 → 测速 → 下载 → 安装 ============ */
@@ -465,9 +496,21 @@ async function downloadAndInstall(opts) {
     });
   }
 
-  onStatus({ phase: "install", message: "下载完成，正在安装…" });
-  installAsset(asset.name, tmp);
-  // 安装流程会自行退出应用，这里不再 resolve
+  onStatus({ phase: "install", message: "下载完成，正在启动安装程序…" });
+  const ir = await startInstall(asset.name, tmp);
+  if (ir && ir.ok) {
+    onStatus({ phase: "install", message: (ir.message || "安装程序已启动") + "；应用即将退出…" });
+    quitSoon(1800); // 给安装器一点时间起来，再退出让出文件占用
+  } else {
+    // 关键：自动安装没起来就别退出应用，把安装包位置与下载页出口交给界面
+    onStatus({
+      phase: "manual",
+      file: tmp,
+      error: (ir && ir.error) || "",
+      message: (ir && ir.message) || "自动安装未能启动。安装包已下载完成，可手动安装。",
+    });
+  }
+  // 安装交给系统后由 quitSoon 退出应用，这里不再 resolve
 }
 
 module.exports = {
@@ -483,4 +526,5 @@ module.exports = {
   sha256File: sha256File,
   fetchOfficialDigest: fetchOfficialDigest,
   RELEASES_PAGE: RELEASES_PAGE,
+  startInstall: startInstall,
 };
