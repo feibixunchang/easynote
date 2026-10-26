@@ -222,10 +222,12 @@
     if (el) el.wrap.style.display = "none";
   }
 
-  function resetFor(m) {
+  // keepPending=true 用于"设置 → 再次确认"的切换：必须保留第一次输入的密码，
+  // 否则确认步拿空串去比较，会永远报"两次输入不一致"（1.2.33 的 bug）。
+  function resetFor(m, keepPending) {
     mode = m;
     input = "";
-    pendingNew = "";
+    if (!keepPending) pendingNew = "";
     build();
     if (m === "unlock") {
       el.title.textContent = "输入密码解锁";
@@ -287,7 +289,7 @@
     if (mode === "setup-new") {
       if (!isValidPin(input)) { shake(); setMsg("请输入 " + MIN_LEN + "~" + MAX_LEN + " 位数字"); return; }
       pendingNew = input;
-      resetFor("setup-confirm");
+      resetFor("setup-confirm", true);   // 保留第一次输入
       return;
     }
     // setup-confirm
@@ -333,6 +335,12 @@
     show();
   };
   api.disable = function () { api.clearPin(); };
+
+  /* 测试钩子：仅供 tools/test-lock.js 驱动状态机（不进界面逻辑） */
+  api._test = {
+    key: function (k) { onKey(k); },
+    state: function () { return { mode: mode, input: input, pending: pendingNew }; },
+  };
 
   root.EZLock = api;
 })(typeof window !== "undefined" ? window : this);

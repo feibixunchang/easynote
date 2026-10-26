@@ -22,10 +22,27 @@ function loadWith(fakeStorage) {
   const win = {
     localStorage: fakeStorage,
     confirm: () => true,
-    document: { head: { appendChild() {} }, body: { appendChild() {}, className: "" }, documentElement: { className: "" },
-                createElement: () => ({ style: {}, classList: { add(){}, remove(){} }, appendChild(){}, addEventListener(){},
-                                        querySelector: () => null, setAttribute(){}, textContent: "" }),
-                getElementById: () => null },
+    document: (() => {
+      // 极简 DOM 桩：够 build()/renderDots() 跑通（用 EZLock._test 驱动状态机做流程测试）
+      const node = () => {
+        const n = {
+          style: {}, className: "", textContent: "", innerHTML: "", type: "", id: "",
+          classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+          _kids: [],
+          appendChild(c) { this._kids.push(c); return c; },
+          removeChild() {}, remove() {}, setAttribute() {}, addEventListener() {},
+          querySelector() { return node(); },
+          _handlers: {},
+        };
+        return n;
+      };
+      return {
+        head: node(), body: node(), documentElement: node(),
+        createElement: () => node(),
+        getElementById: () => null,
+        execCommand: () => true,
+      };
+    })(),
     setTimeout: setTimeout, clearTimeout: clearTimeout, setInterval: setInterval, clearInterval: clearInterval,
   };
   global.window = win;
@@ -91,6 +108,43 @@ state = EZ2.lockState(t + EZ2.LOCK_MS + 1);
 ok("锁定到期自动解除", state.locked === false, JSON.stringify(state));
 ok("正确密码仍然有效（锁定期不影响校验本身）", EZ2.verify("1234") === true);
 
-console.log("\n────────────────────────");
-console.log("通过 " + pass + " 项，失败 " + fail + " 项");
-process.exit(fail ? 1 : 0);
+console.log("\n【5】设置密码两步流程（回归：1.2.33 曾恒报「两次输入不一致」）");
+{
+  const st3 = memStorage();
+  const EZ3 = loadWith(st3);
+  let doneOk = null;
+  EZ3.setup({ onDone: function (ok) { doneOk = ok; } });
+  ["1", "2", "3", "4"].forEach((k) => EZ3._test.key(k));
+  EZ3._test.key("fn-ok");
+  const s1 = EZ3._test.state();
+  ok("第一步输入被保留下来（修复点）", s1.mode === "setup-confirm" && s1.pending === "1234", JSON.stringify(s1));
+  ["1", "2", "3", "4"].forEach((k) => EZ3._test.key(k));
+  EZ3._test.key("fn-ok");
+  ok("两次一致 → 保存成功并回调 onDone(true)", doneOk === true, String(doneOk));
+  ok("密码已生效", EZ3.isEnabled() === true && EZ3.verify("1234") === true);
+
+  // 反例：两次不一致 → 回到第一步并提示，且不应保存
+  let doneOk2 = null;
+  EZ3.setup({ onDone: function (ok) { doneOk2 = ok; } });
+  ["9", "9", "9", "9"].forEach((k) => EZ3._test.key(k));
+  EZ3._test.key("fn-ok");
+  ["8", "8", "8", "8"].forEach((k) => EZ3._test.key(k));
+  EZ3._test.key("fn-ok");
+  const s2 = EZ3._test.state();
+  ok("两次不一致 → 回到第一步、不回调成功", s2.mode === "setup-new" && doneOk2 === null, JSON.stringify(s2));
+  ok("原有密码未被破坏", EZ3.verify("1234") === true);
+
+  // 6 位也走通（够位自动进入确认）
+  let doneOk3 = null;
+  EZ3.setup({ onDone: function (ok) { doneOk3 = ok; } });
+  ["1", "2", "3", "4", "5", "6"].forEach((k) => EZ3._test.key(k));
+  // 6 位会自动 submit（setTimeout 80ms）→ 稍后再输确认
+  setTimeout(function () {
+    ["1", "2", "3", "4", "5", "6"].forEach((k) => EZ3._test.key(k));
+    EZ3._test.key("fn-ok");
+    ok("6 位密码两次一致也能保存", doneOk3 === true && EZ3.verify("123456") === true, String(doneOk3));
+    console.log("\n────────────────────────");
+    console.log("通过 " + pass + " 项，失败 " + fail + " 项");
+    process.exit(fail ? 1 : 0);
+  }, 200);
+}
