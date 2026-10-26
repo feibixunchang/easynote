@@ -4,6 +4,10 @@ const path = require("path");
 const fs = require("fs");
 const { execFile } = require("child_process");
 const updater = require("./updater");
+// 共享核心（纯函数）：Node 侧 require 后是 { EZCore }，用于导出文件名等标题计算。
+// 取不到也不能崩（老版本目录结构理论上有，但兜底更稳），下面按需回退。
+let sharedCore = null;
+try { sharedCore = require("./shared/core.js"); } catch (e) { sharedCore = null; }
 
 const APP_VERSION = app.getVersion();
 const REPO_OWNER = "feibixunchang";
@@ -1180,7 +1184,10 @@ ipcMain.handle("webdav-export", function (_e, cfg, notes) {
     let okCount = 0;
     const failed = [];
     for (const n of notes) {
-      const title = ((n.content || "").split("\n").find(function (l) { return l.trim(); }) || "无标题").trim();
+      // 标题用共享核心计算：跳过纯图片行，避免把 ![名](data:base64) 当文件名
+      const title = (sharedCore && sharedCore.EZCore
+        ? sharedCore.EZCore.noteTitle(n.content)
+        : ((n.content || "").split("\n").find(function (l) { return l.trim(); }) || "无标题").trim());
       const md =
         "# " + title + "\n\n" +
         "- 创建时间：" + new Date(n.createdDate || Date.now()).toLocaleString("zh-CN") + "\n" +

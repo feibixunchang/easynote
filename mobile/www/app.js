@@ -36,7 +36,7 @@
   var DAV_KEY = "simplenote_zh_webdav";
   var TRASHDAYS_KEY = "simplenote_zh_trashdays"; // 回收站自动清理天数（0 = 关闭）
   // 兜底版本号：原生端由 App.getInfo() 覆盖；浏览器/预览环境下用它
-  var APP_VERSION = "1.0.15";
+  var APP_VERSION = "1.0.16";
 
   // 安全存储：隐私模式 / 存储被禁时回退内存，保证可用
   var _mem = {};
@@ -1046,10 +1046,10 @@
   }
 
   // 弹窗里给笔记一个可读的名字（取首行、去掉 Markdown 符号，最长 24 字）
+  // 标题摘要（删除确认、导出文件名都用它）：交给共享核心 ——
+  // 否则"图片在第一行"时会把一整串 base64 显示/当文件名。
   function noteCaption(note) {
-    var first = String((note && note.content) || "").split("\n")[0] || "";
-    var t = first.replace(/^[#>\-\*\s]+/, "").trim();
-    if (!t) return "无标题";
+    var t = EZCore.noteTitle(note && note.content);
     return t.length > 24 ? t.slice(0, 24) + "…" : t;
   }
 

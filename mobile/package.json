@@ -1,6 +1,6 @@
 {
   "name": "simplenote-zh-mobile",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "description": "简易笔记 · 移动端（iOS / Android），与桌面端功能一致的 Capacitor 应用",
   "private": true,
   "scripts": {
