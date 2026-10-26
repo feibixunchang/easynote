@@ -14,6 +14,7 @@
 const https = require("https");
 const http = require("http");
 const fs = require("fs");
+const crypto = require("crypto");
 const path = require("path");
 const { execFile, spawn } = require("child_process");
 const { app } = require("electron");
@@ -351,6 +352,36 @@ function installAsset(name, filePath) {
 }
 
 /* ============ 入口：检测 → 测速 → 下载 → 安装 ============ */
+/* ============ 完整性校验（防镜像投毒 / 下载被篡改）============
+ * 思路：安装包的官方 sha256 从 GitHub Releases API 的资产 digest 字段获取；
+ *      下载完成后在本地重新计算 sha256 并比对。
+ *      这样即使实际下载走了第三方镜像，也能保证拿到的就是官方那一份。
+ *      拿不到 digest（API 不通 / 资产是旧上传没有 digest）时，不静默通过，
+ *      而是明确提示「未能校验完整性」，把判断权交给用户。 */
+function sha256File(file) {
+  return new Promise(function (resolve, reject) {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(file);
+    stream.on("data", function (chunk) { hash.update(chunk); });
+    stream.on("end", function () { resolve(hash.digest("hex")); });
+    stream.on("error", reject);
+  });
+}
+
+/* 取指定版本某个资产的官方 sha256（返回小写 64 位 hex；拿不到则 null） */
+async function fetchOfficialDigest(version, assetName) {
+  const assets = await fetchReleaseAssets(version).catch(function () { return null; });
+  if (!assets) return null;
+  for (let i = 0; i < assets.length; i++) {
+    const a = assets[i];
+    if (!a || a.name !== assetName) continue;
+    if (typeof a.digest === "string" && /^sha256:[0-9a-f]{64}$/i.test(a.digest)) {
+      return a.digest.slice(7).toLowerCase();
+    }
+  }
+  return null;
+}
+
 async function downloadAndInstall(opts) {
   const onStatus = opts.onStatus || function () {};
   const version = opts.version;
@@ -409,6 +440,31 @@ async function downloadAndInstall(opts) {
     return;
   }
 
+  // —— 完整性校验：下载完先验 sha256，再安装 ——
+  onStatus({ phase: "verify", message: "正在校验安装包完整性…" });
+  let officialDigest = null;
+  try { officialDigest = await fetchOfficialDigest(version, asset.name); } catch (e) {}
+  if (officialDigest) {
+    let actual = "";
+    try { actual = await sha256File(tmp); } catch (e) { actual = ""; }
+    if (actual !== officialDigest) {
+      try { fs.unlinkSync(tmp); } catch (e) {}
+      onStatus({
+        phase: "error",
+        message: "安装包校验未通过（sha256 不匹配），已丢弃。可能是下载被篡改或文件损坏；" +
+          "请重试，或到 " + RELEASES_PAGE + " 手动下载",
+      });
+      return;
+    }
+    onStatus({ phase: "verify", message: "完整性校验通过 ✓" });
+  } else {
+    onStatus({
+      phase: "verify",
+      message: "提示：未能获取官方 sha256（GitHub 接口不通），本次无法校验完整性；" +
+        "若不放心可到 " + RELEASES_PAGE + " 手动下载",
+    });
+  }
+
   onStatus({ phase: "install", message: "下载完成，正在安装…" });
   installAsset(asset.name, tmp);
   // 安装流程会自行退出应用，这里不再 resolve
@@ -424,5 +480,7 @@ module.exports = {
   fetchReleaseAssets: fetchReleaseAssets,
   assetNameCandidates: assetNameCandidates,
   releaseDownloadUrl: releaseDownloadUrl,
+  sha256File: sha256File,
+  fetchOfficialDigest: fetchOfficialDigest,
   RELEASES_PAGE: RELEASES_PAGE,
 };
