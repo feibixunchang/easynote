@@ -2876,8 +2876,18 @@
     function showUpdate(info) {
       if (!info || !info.version) return;
       releaseUrl = info.url || "";
-      // 横幅变为「发现新版本 vX」+「下载」按钮；点击后在应用内下载（带进度）
-      showBanner("发现新版本 v" + info.version, "下载", startUpdateFlow);
+      if (api && api.startUpdate) {
+        // 桌面端：横幅变为「发现新版本 vX」+「下载」，点击在应用内下载（带进度）
+        showBanner("发现新版本 v" + info.version, "下载", startUpdateFlow);
+      } else {
+        // 浏览器/网页版没有 electronAPI.startUpdate —— 以前按钮是空操作（点了没反应），
+        // 这里直接改成「前往下载」，跳到 Release 页面。
+        showBanner("发现新版本 v" + info.version, "前往下载", function () {
+          var u = releaseUrl || RELEASES_PAGE;
+          if (api && api.openExternal) api.openExternal(u);
+          else window.open(u, "_blank");
+        });
+      }
     }
 
     // 点击「下载」→ 启动主进程的应用内更新流程，并监听进度事件刷新横幅
