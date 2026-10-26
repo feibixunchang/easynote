@@ -230,6 +230,42 @@ function loadWith(win) {
         Capacitor: { isNativePlatform: () => true, Plugins: { BiometricAuthNative: { authenticate: () => Promise.reject(new Error("cancel")) } } } })
         .biometric.verify("x")) === false);
 
+    // 回归修复（iOS 生物识别"不生效"根因）：原生代码已编进 App（PluginHeaders 有 BiometricAuthNative），
+    // 但 JS 代理从未注册（cordova_plugins.js 为空）→ cap.Plugins.BiometricAuthNative 为 undefined，
+    // 导致 isAvailable 永远 false、设置里根本开不了生物识别。
+    // ensureBioPlugin 应在"取用"时依据原生 PluginHeaders 手工注册，使 checkBiometry / internalAuthenticate 路由到原生。
+    const cFix = [];
+    const nativeImpl = {
+      checkBiometry: () => { cFix.push("native:check"); return Promise.resolve({ isAvailable: true, biometryType: "faceId" }); },
+      internalAuthenticate: (o) => { cFix.push("native:auth:" + o.reason); return Promise.resolve(); },
+    };
+    const capFix = {
+      isNativePlatform: () => true, getPlatform: () => "ios",
+      Plugins: {}, // 关键：代理未预先注册（真实 iOS 包里就是这种状态）
+      // 原生桥会把这个插件写进 PluginHeaders（Package.swift 已含 AparajitaCapacitorBiometricAuth）
+      PluginHeaders: [ { name: "BiometricAuthNative", methods: [ { name: "checkBiometry", rtype: "promise" }, { name: "internalAuthenticate", rtype: "promise" } ] } ],
+      nativePromise: (name, method, options) => {
+        cFix.push("nativePromise:" + name + "." + method);
+        return (nativeImpl[method] || (() => Promise.resolve()))(options);
+      },
+      registerPlugin: function (name) {
+        const self = this;
+        const proxy = new Proxy({}, { get(_t, prop) {
+          if (prop === "$$typeof" || prop === "toJSON") return undefined;
+          return function (options) { return self.nativePromise(name, prop.toString(), options); };
+        } });
+        this.Plugins[name] = proxy;
+        return proxy;
+      },
+    };
+    const EZfix = loadWith({ navigator: { userAgent: "iPhone" }, Capacitor: capFix, console: console });
+    ok("修复：未注册但 PluginHeaders 有它 → 自动注册后可用性可用",
+      (await EZfix.biometric.isAvailable()) === true && cFix.indexOf("nativePromise:BiometricAuthNative.checkBiometry") !== -1, cFix.join(","));
+    ok("修复：验证优先走原生 internalAuthenticate（而非 authenticate）",
+      (await EZfix.biometric.verify("解锁简易笔记")) === true
+        && cFix.indexOf("nativePromise:BiometricAuthNative.internalAuthenticate") !== -1
+        && cFix.indexOf("native:auth:解锁简易笔记") !== -1, cFix.join(","));
+
     // 浏览器：WebAuthn 平台认证器
     const c3 = [];
     const winB = {

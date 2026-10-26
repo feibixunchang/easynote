@@ -33,7 +33,30 @@
 
   /* ---------- Capacitor 插件取用（拿不到就返回 null，调用方自行兜底）---------- */
   /* 生物识别插件的注册名各版本不同（@aparajita 的是 BiometricAuthNative），统一取用 */
+
+  /* 关键修复（iOS 生物识别"不生效"）：
+   * iOS 工程的原生代码确实编进 App 了（Package.swift 里有 AparajitaCapacitorBiometricAuth，
+   * 原生桥会把它写进 window.Capacitor.PluginHeaders），但 JS 端的插件代理从来没被注册过——
+   * 整个 web 包里没有任何 registerPlugin 调用，cordova_plugins.js 也是空的，
+   * 于是 cap.Plugins.BiometricAuthNative 是 undefined，bioPlugin() 返回 null，
+   * 结果 isAvailable() 永远 false → 设置里根本开不了生物识别。
+   * 这里在"取用"时顺手补注册：只要原生 PluginHeaders 里有这个插件，就建一个纯路由代理，
+   * 把 checkBiometry / internalAuthenticate 直接转到原生。已正常注册时（plug 能取到）直接跳过，幂等。 */
+  function ensureBioPlugin() {
+    if (NAME !== "capacitor") return; // 仅移动端走这个原生插件；桌面走 electronAPI、网页走 WebAuthn
+    if (!cap || typeof cap.registerPlugin !== "function") return;
+    if (cap.Plugins && cap.Plugins.BiometricAuthNative) return; // 已被 cordova 加载器或插件自带注册
+    try {
+      // 原生已经编进 App，PluginHeaders 里有方法表；这里只建一个空壳代理，让方法直接路由到原生。
+      cap.registerPlugin("BiometricAuthNative", {
+        ios: function () { return {}; },
+        android: function () { return {}; },
+      });
+    } catch (e) {}
+  }
+
   function bioPlugin() {
+    ensureBioPlugin();
     return plug("BiometricAuthNative") || plug("BiometricAuth") || null;
   }
 
