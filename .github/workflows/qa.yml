@@ -1,0 +1,47 @@
+
+name: 简易笔记 · 质量守卫（QA）
+
+# 目的：把「改坏同步逻辑」和「三端改漏一端」这两类问题挡在合入之前。
+#   1) 全量语法检查（node --check）
+#   2) 服务端同步回归测试（server/test-sync.js）——覆盖墓碑防复活 / 游标不漏 / 原子写 / 脏数据拦截
+#   3) 三端一致性守卫（tools/parity-check.sh）——同步契约缺任何一端即失败
+#
+# 触发：推送到 main / 任意 PR / 手动。
+
+on:
+  push:
+    branches: ["main"]
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 语法检查（前端三端 + 桌面主进程 + 服务端）
+        run: |
+          set -e
+          for f in app.js mobile/www/app.js server/web/app.js main.js preload.js updater.js server/server.js; do
+            echo "check $f"
+            node --check "$f"
+          done
+
+      - name: 安装服务端依赖
+        working-directory: server
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: 服务端同步回归测试
+        working-directory: server
+        run: node test-sync.js
+
+      - name: 三端一致性守卫
+        run: bash tools/parity-check.sh
