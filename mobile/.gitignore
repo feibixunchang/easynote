@@ -17,6 +17,8 @@ android/app/src/main/res/xml/config.xml
 
 # iOS：原生工程纳入版本管理；构建产物与 cap sync 生成物由 ios/.gitignore 处理
 ios/App/build/
+ios/App/build-ios/
+ios/App/build-dd*/
 ios/App/Pods/
 ios/App/Podfile.lock
 ios/DerivedData/

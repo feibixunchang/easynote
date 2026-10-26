@@ -34,30 +34,35 @@
   /* ---------- Capacitor 插件取用（拿不到就返回 null，调用方自行兜底）---------- */
   /* 生物识别插件的注册名各版本不同（@aparajita 的是 BiometricAuthNative），统一取用 */
 
-  /* 关键修复（iOS 生物识别"不生效"）：
-   * iOS 工程的原生代码确实编进 App 了（Package.swift 里有 AparajitaCapacitorBiometricAuth，
-   * 原生桥会把它写进 window.Capacitor.PluginHeaders），但 JS 端的插件代理从来没被注册过——
-   * 整个 web 包里没有任何 registerPlugin 调用，cordova_plugins.js 也是空的，
-   * 于是 cap.Plugins.BiometricAuthNative 是 undefined，bioPlugin() 返回 null，
-   * 结果 isAvailable() 永远 false → 设置里根本开不了生物识别。
-   * 这里在"取用"时顺手补注册：只要原生 PluginHeaders 里有这个插件，就建一个纯路由代理，
-   * 把 checkBiometry / internalAuthenticate 直接转到原生。已正常注册时（plug 能取到）直接跳过，幂等。 */
-  function ensureBioPlugin() {
-    if (NAME !== "capacitor") return; // 仅移动端走这个原生插件；桌面走 electronAPI、网页走 WebAuthn
-    if (!cap || typeof cap.registerPlugin !== "function") return;
-    if (cap.Plugins && cap.Plugins.BiometricAuthNative) return; // 已被 cordova 加载器或插件自带注册
-    try {
-      // 原生已经编进 App，PluginHeaders 里有方法表；这里只建一个空壳代理，让方法直接路由到原生。
-      cap.registerPlugin("BiometricAuthNative", {
-        ios: function () { return {}; },
-        android: function () { return {}; },
-      });
-    } catch (e) {}
+  /* iOS 生物识别桥接（关键修复）：
+   * 实测 iOS 工程的 Capacitor 运行时（native-bridge.js）并没有暴露 registerPlugin，
+   * 也没有 cap.Plugins 自动代理——它只提供 cap.toNative / cap.nativePromise，
+   * 按 pluginId 直接把调用 post 给原生插件。原生 @aparajita/capacitor-biometric-auth
+   * 以 identifier "BiometricAuthNative" 注册进 Capacitor 桥，因此这里直接用
+   * cap.nativePromise("BiometricAuthNative", method, options) 桥接，不依赖 registerPlugin。
+   * 若官方包已被打包并注册（cap.Plugins.BiometricAuthNative 存在）则优先用它。 */
+  function bioNative() {
+    if (!cap || typeof cap.nativePromise !== "function") return null;
+    var mk = function (method) {
+      return function (options) {
+        return cap.nativePromise("BiometricAuthNative", method, options || {});
+      };
+    };
+    return { checkBiometry: mk("checkBiometry"), internalAuthenticate: mk("internalAuthenticate") };
   }
 
   function bioPlugin() {
-    ensureBioPlugin();
-    return plug("BiometricAuthNative") || plug("BiometricAuth") || null;
+    // iOS 的 Capacitor 运行时没有 registerPlugin、也没有 cap.Plugins 自动代理，
+    // 只能靠 cap.nativePromise 按 pluginId 直接桥接原生插件 BiometricAuthNative。
+    // 即便官方 @aparajita 包被打包并注册，走 nativePromise 也等价（其原生方法正是 checkBiometry / internalAuthenticate）。
+    var p = bioNative() || plug("BiometricAuthNative") || plug("BiometricAuth");
+    if (NAME === "capacitor" && typeof console !== "undefined") {
+      try {
+        var headers = (cap.PluginHeaders || []).map(function (h) { return h.name; });
+        console.log("[bio] PluginHeaders:", JSON.stringify(headers), "| plugin:", !!p, "| check:", !!(p && p.checkBiometry), "| auth:", !!(p && p.internalAuthenticate));
+      } catch (e) {}
+    }
+    return p;
   }
 
   function plug(name) {
@@ -447,7 +452,7 @@
         }
         if (NAME === "capacitor") {
           var b = bioPlugin();
-          if (!b || !b.authenticate) return Promise.resolve(false);
+          if (!b || (!b.authenticate && !b.internalAuthenticate)) return Promise.resolve(false);
           bioLastError = null;
           // 注意：@aparajita/capacitor-biometric-auth 的原生方法名是 internalAuthenticate。
           // 我们是通过桥接代理取到的插件（没有 npm 包装类），调 authenticate() 会直接抛"未实现"，
